@@ -33,7 +33,6 @@ android {
             "unknown"
         }
 
-        buildConfigField("String", "A0PROD_HOST", "\"j.your-tailnet.ts.net\"")
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
     }

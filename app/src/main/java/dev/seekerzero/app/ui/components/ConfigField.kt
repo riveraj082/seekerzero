@@ -68,7 +68,7 @@ private fun ConfigFieldPreview() {
     SeekerZeroTheme {
         ConfigField(
             label = "Tailnet host",
-            value = "j.your-tailnet.ts.net",
+            value = "a0.example.ts.net",
             onChange = {},
             trailingHelp = {}
         )
