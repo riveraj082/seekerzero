@@ -24,7 +24,7 @@ MIT license permits copying code with attribution. Any non-trivial snippet taken
 
 | Area | Decision |
 |---|---|
-| **Transport** | Tailscale. Seeker joins existing tailnet, talks directly to a0prod at `j.your-tailnet.ts.net`. No relay, no separate WireGuard layer. |
+| **Transport** | Tailscale. Seeker joins existing tailnet, talks directly to a0prod at `a0prod.your-tailnet.ts.net`. No relay, no separate WireGuard layer. |
 | **Auth** | Tailscale device identity. No app-level login, no tokens, no API keys. Device on the tailnet = authorized. |
 | **Stack** | Native Kotlin + Jetpack Compose + Material 3. Android Studio. No cross-platform framework. |
 | **Solana Mobile SDK** | Not used. SeekerZero does not touch the blockchain or wallets. Seeker is a normal Android device. |
@@ -324,7 +324,7 @@ Derived from SeekerClaw's `build.gradle.kts` with aggressive subtractions.
 Expected size: SeekerClaw's `build.gradle.kts` is ~230 lines. SeekerZero's target is ~80 lines.
 
 **Custom `BuildConfig` fields to inject:**
-- `A0PROD_HOST` — default tailnet host string for debug builds (`j.your-tailnet.ts.net`)
+- `A0PROD_HOST` — default tailnet host string for debug builds (`a0prod.your-tailnet.ts.net`)
 - Git SHA (short), via `providers.exec` at build time
 - Build date (ISO format)
 
@@ -449,7 +449,8 @@ Plain JSON, no encryption (no secrets — Tailscale identity is the auth):
 ```json
 {
   "v": 1,
-  "a0_host": "j.your-tailnet.ts.net",
+  "a0_host": "a0prod.your-tailnet.ts.net",
+  "port": 50080,
   "mobile_api_base": "/mobile",
   "client_id": "seekerzero-james-seeker",
   "display_name": "James's Seeker"

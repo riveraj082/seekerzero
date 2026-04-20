@@ -34,3 +34,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Dev-only QR output from tools/generate_qr.py
+seeker-config-qr.png

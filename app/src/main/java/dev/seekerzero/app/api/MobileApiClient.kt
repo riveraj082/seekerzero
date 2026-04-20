@@ -37,12 +37,14 @@ object MobileApiClient {
     }.onFailure { LogCollector.w(TAG, "health() failed: ${it.message}") }
 
     private fun buildUrl(pathSuffix: String): String {
-        val host = ConfigManager.a0Host
+        val rawHost = ConfigManager.a0Host
             ?: throw IllegalStateException("a0_host not configured")
+        val hostNoScheme = rawHost.removePrefix("http://").removePrefix("https://")
+        val hostNoPort = hostNoScheme.substringBefore(':')
+        val port = ConfigManager.port
         val base = ConfigManager.mobileApiBase.trimEnd('/')
         val suffix = if (pathSuffix.startsWith("/")) pathSuffix else "/$pathSuffix"
-        val scheme = if (host.startsWith("http://") || host.startsWith("https://")) "" else "http://"
-        return "$scheme$host$base$suffix"
+        return "http://$hostNoPort:$port$base$suffix"
     }
 
     private suspend fun execute(request: Request): String =

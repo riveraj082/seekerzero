@@ -48,6 +48,7 @@ object QrParser {
 
         if (payload.v != 1) return Result.failure(QrParseException.UnsupportedVersion(payload.v))
         if (payload.a0Host.isBlank()) return Result.failure(QrParseException.MissingField("a0_host"))
+        if (payload.port !in 1..65535) return Result.failure(QrParseException.MissingField("port"))
         if (payload.clientId.isBlank()) return Result.failure(QrParseException.MissingField("client_id"))
         if (payload.mobileApiBase.isBlank()) return Result.failure(QrParseException.MissingField("mobile_api_base"))
         if (payload.displayName.isBlank()) return Result.failure(QrParseException.MissingField("display_name"))
