@@ -24,14 +24,11 @@ android {
             timeZone = TimeZone.getTimeZone("UTC")
         }.format(Date())
 
-        val gitSha = try {
-            val stdout = java.io.ByteArrayOutputStream()
-            exec {
+        val gitSha: String = try {
+            providers.exec {
                 commandLine("git", "rev-parse", "--short", "HEAD")
-                standardOutput = stdout
                 isIgnoreExitValue = true
-            }
-            stdout.toString().trim().ifEmpty { "unknown" }
+            }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
         } catch (_: Exception) {
             "unknown"
         }
