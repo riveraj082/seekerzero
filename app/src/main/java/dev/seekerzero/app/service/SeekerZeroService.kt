@@ -6,6 +6,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -23,7 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -33,7 +36,6 @@ class SeekerZeroService : Service() {
         private const val TAG = "SeekerZeroService"
         private const val SERVICE_NOTIFICATION_ID = 1
         private const val APPROVAL_NOTIFICATION_ID_BASE = 1000
-        private const val PRIMITIVE_RETRY_DELAY_MS = 2_000L
 
         fun start(context: Context) {
             val intent = Intent(context, SeekerZeroService::class.java)
@@ -53,12 +55,49 @@ class SeekerZeroService : Service() {
     private var pollJob: Job? = null
     private var lastSinceMs: Long? = null
     private val seenApprovalIds = mutableSetOf<String>()
+    private val watchdog = ConnectionWatchdog()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         LogCollector.d(TAG, "onCreate")
+        registerNetworkCallback()
+    }
+
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                LogCollector.d(TAG, "network onAvailable")
+                watchdog.signalNetworkAvailable()
+                if (ServiceState.connectionState.value == ConnectionState.PAUSED_NO_NETWORK) {
+                    ServiceState.setConnectionState(ConnectionState.RECONNECTING)
+                }
+            }
+
+            override fun onLost(network: Network) {
+                LogCollector.d(TAG, "network onLost")
+                ServiceState.setConnectionState(ConnectionState.PAUSED_NO_NETWORK)
+            }
+        }
+        cm.registerNetworkCallback(request, cb)
+        networkCallback = cb
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = networkCallback ?: return
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.unregisterNetworkCallback(cb)
+        } catch (t: Throwable) {
+            LogCollector.w(TAG, "unregisterNetworkCallback failed: ${t.message}")
+        }
+        networkCallback = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,6 +112,7 @@ class SeekerZeroService : Service() {
         LogCollector.d(TAG, "onDestroy")
         pollJob?.cancel()
         scope.cancel()
+        unregisterNetworkCallback()
         ServiceState.setConnectionState(ConnectionState.DISCONNECTED)
         super.onDestroy()
     }
@@ -127,6 +167,7 @@ class SeekerZeroService : Service() {
             lastSinceMs = resp.serverTimeMs
             ServiceState.markContact(resp.serverTimeMs)
             ServiceState.setConnectionState(ConnectionState.CONNECTED)
+            watchdog.resetBackoff()
             LogCollector.d(TAG, "primed with ${resp.approvals.size} pending approvals")
         }.onFailure {
             ServiceState.setConnectionState(ConnectionState.RECONNECTING)
@@ -139,6 +180,7 @@ class SeekerZeroService : Service() {
             MobileApiClient.approvalsStream(lastSinceMs).onSuccess { resp ->
                 ServiceState.markContact(resp.serverTimeMs)
                 ServiceState.setConnectionState(ConnectionState.CONNECTED)
+                watchdog.resetBackoff()
                 lastSinceMs = resp.nextSinceMs
                 if (resp.approvals.isNotEmpty()) {
                     ServiceState.mergePendingApprovals(resp.approvals)
@@ -149,8 +191,8 @@ class SeekerZeroService : Service() {
             }.onFailure { err ->
                 ServiceState.setConnectionState(ConnectionState.RECONNECTING)
                 ServiceState.incrementReconnectCount()
-                LogCollector.w(TAG, "stream error: ${err.message}; retrying in ${PRIMITIVE_RETRY_DELAY_MS}ms")
-                delay(PRIMITIVE_RETRY_DELAY_MS)
+                LogCollector.w(TAG, "stream error: ${err.message}")
+                watchdog.waitBeforeRetry()
             }
         }
     }
