@@ -1,0 +1,22 @@
+[
+  {
+    "id": "appr-shell-001",
+    "created_at_ms": 1713620000000,
+    "category": "shell",
+    "risk": "medium",
+    "summary": "Run: rm -rf /tmp/build-cache",
+    "detail": "Agent Zero wants to clear the build cache to free disk space. This will delete all intermediate build artifacts under /tmp/build-cache (approximately 2.1 GB).",
+    "source": "a0-work",
+    "task_id": "task-build-cleanup-42"
+  },
+  {
+    "id": "appr-cost-002",
+    "created_at_ms": 1713620120000,
+    "category": "cost",
+    "risk": "low",
+    "summary": "Spend $3.40 on Claude API call",
+    "detail": "Long-running research task estimates 1.1M input + 45K output tokens at Sonnet 4.6 pricing.",
+    "source": "a0-think",
+    "task_id": "task-research-17"
+  }
+]
