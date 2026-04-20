@@ -1,8 +1,8 @@
-# SeekerZero — Plan v2 (2026-04-09)
+# SeekerZero — Plan v3 (2026-04-20)
 
-**Supersedes:** `seekerzero-plan-2026-04-09.md`, `seekerzero-vs-seekerclaw-2026-04-09.md`, `seekerzero-vs-seekerclaw-code-review-2026-04-09.md`, `seekerzero-network-recovery-2026-04-09.md`, `seekerzero-ui-components-2026-04-09.md`.
+**Supersedes Plan v2** (same file, scope pivot). v2 was an approvals-only thin client (tabs: Approvals / Tasks read-only / Cost / Diagnostics). v3 widens the remit: SeekerZero is now a **full A0 client on mobile** — chat, terminal, scheduled-task management, and approvals — with the Seeker as a first-class command surface equivalent to the web UI. Phase 1 (approvals end-to-end) shipped under the v2 plan and carries over without change; Cost and Diagnostics were cut. Chat, Terminal, and Task write-path are new.
 
-Native Android app on the Solana Seeker phone. Mobile command surface for Agent Zero (a0prod). Separate codebase from the benched Seeker dapp project; same device, different job. The Seeker is treated as a normal Android phone — no Solana Mobile Stack, no wallet, no blockchain interaction.
+Native Android app on the Solana Seeker phone. Full Agent Zero client over Tailscale. Separate codebase from the benched Seeker dapp project; same device, different job. The Seeker is treated as a normal Android phone — no Solana Mobile Stack, no wallet, no blockchain interaction.
 
 Renamed from "SeekerClaw" early in planning to avoid collision with the existing open-source SeekerClaw project (sepivip/SeekerClaw on GitHub, MIT) and to accurately reflect that this app connects to Agent Zero, not Claude.
 
@@ -38,8 +38,10 @@ MIT license permits copying code with attribution. Any non-trivial snippet taken
 | **Boot behavior** | `BootReceiver` restores the toggle state after first unlock. If toggle was on before reboot, service auto-starts; if off, stays off. |
 | **Telemetry** | **None.** No Firebase, no Crashlytics, no analytics of any kind. LogCollector is in-memory + local log file only. |
 | **Distribution** | Sideload via ADB. Single build flavor, single signing config. No Play Store, no dApp Store. |
-| **v1 surfaces** | (1) Approval gates, (2) Scheduled task visibility, (3) Cost dashboard, (4) Diagnostics. |
-| **Sequencing** | Approvals → tasks → cost → diagnostics. Each independently shippable. |
+| **v1 surfaces** | (1) Chat, (2) Approvals, (3) Tasks (read + create), (4) Terminal (SSH pty to a0prod). |
+| **Sequencing** | Approvals (**shipped**) → Chat → Terminal → Tasks read+write. Each independently shippable. |
+| **SSH key provisioning** | Per-device Ed25519 keypair generated in Android Keystore on first run. Public key shown on SetupScreen; user pastes into `~/.ssh/authorized_keys` on a0prod once. Private key never leaves the phone. Hardware-backed where the Seeker's StrongBox allows. |
+| **Chat persistence** | Source of truth on a0prod; phone caches the recent N messages locally (Room DB) for instant-open UX. On reconnect the phone fetches the tail since its last-known message id and merges. |
 | **Repo conventions** | `CLAUDE.md` + `PROJECT.md` split. `docs/internal/SETTINGS_INFO.md` mirroring `SettingsHelpTexts.kt`. `docs/internal/TEMPLATES.md` mirroring Android `strings.xml`. |
 
 ---
@@ -58,24 +60,34 @@ Approval gates broadcast to all registered clients (Telegram + SeekerZero + webu
 
 ### Endpoints (v1)
 
-**Approvals**
+**Health** (always-on)
+- `GET /mobile/health` — reachability + fleet snapshot. Used by setup, reconnect watchdog, and diagnostics surface wherever it lives.
+
+**Approvals** (Phase 1 — shipped)
 - `GET /mobile/approvals/pending` — list open approval gates
 - `GET /mobile/approvals/stream?since=<ms>` — long-poll endpoint, 60s server-held hold. When `since` is provided (on reconnect), returns everything raised during the gap first (capped at 24h lookback) then falls into normal long-poll behavior. Without `since`, behaves as normal stream.
 - `POST /mobile/approvals/{id}/approve` — approve a gate
 - `POST /mobile/approvals/{id}/reject` — reject a gate
-- `GET /mobile/approvals/{id}` — detail for one gate
+- `GET /mobile/approvals/{id}` — detail for one gate (not yet implemented; cards self-contain enough for now)
 
-**Tasks (Phase 2, read-only)**
+**Chat** (Phase 5)
+- `GET /mobile/chat/history?limit=<n>&before_id=<id>` — paged message history, newest-first, reverse-chronological. Default `limit=50`, cap 200. `before_id` drives infinite-scroll into older messages.
+- `POST /mobile/chat/send` — submit a user prompt. Body: `{text, context_id?}`. Returns `{message_id, created_at_ms}` immediately; the assistant's streamed response lands on the stream endpoint below.
+- `GET /mobile/chat/stream?since_id=<id>` — long-poll for new chat events (user echoes + assistant token deltas + assistant turn-complete). Same 60s hold shape as approvals/stream. Events carry `message_id`, `role`, `delta`, `is_final`. Token-granular streaming so the phone can render tokens as they arrive.
+- `GET /mobile/chat/contexts` — list of active conversation contexts (A0 may route chats through multiple contexts; v1 defaults to a single "mobile" context).
+
+**Tasks** (Phase 7 — read + create, edit stays v2)
 - `GET /mobile/tasks/scheduled` — list scheduled tasks with last-run status and next-run time
+- `GET /mobile/tasks/{id}` — detail for one task (cron, prompt, profile, history)
+- `POST /mobile/tasks` — create a scheduled task. Body: `{name, prompt, cron, profile?, state?}`. Server validates cron + profile.
+- `POST /mobile/tasks/{id}/run` — trigger an immediate ad-hoc run of a scheduled task (does not change its schedule)
+- `POST /mobile/tasks/{id}/enable` + `POST /mobile/tasks/{id}/disable` — toggle `state` without editing the task body
 
-**Cost (Phase 3, read-only)**
-- `GET /mobile/cost/summary` — daily / 7-day / 30-day rollups from the existing 4-type cost tracking (input, output, cache write, cache read)
-
-**Diagnostics (Phase 4)**
-- `GET /mobile/health` — on-demand health snapshot: subordinate fleet status (a0-think, a0-work, a0-quick, a0-embed — up/down + last response time), scheduler health, cost posture, and a natural-language "what's wrong" string populated by Agent Zero when anything is degraded
+**Terminal** (Phase 6)
+- No new `/mobile/*` endpoints. The phone SSHes to a0prod directly over the tailnet on port 22 using the per-device Ed25519 key. Agent Zero does not mediate the terminal session; this is a normal SSH session to the host.
 
 **Config handoff**
-- `GET /mobile/config/qr` — renders a scannable QR (PNG or data URI) encoding the SeekerZero config payload. Accessed from a browser on a0prod during first-run setup.
+- `GET /mobile/config/qr` — renders a scannable QR (PNG or data URI) encoding the SeekerZero config payload. Accessed from a browser on a0prod during first-run setup. (Not yet implemented server-side; dev flow uses `tools/generate_qr.py` until it is.)
 
 ### Auth on the server side
 
@@ -112,26 +124,39 @@ Single process. Foreground service runs in the **main app process**, not a subpr
 MainActivity (Compose entry point, trivial)
   ↓
 SeekerZeroNavHost
-  ├── SetupScreen (first-run only)
+  ├── SetupScreen (first-run only: QR + SSH pubkey enrollment)
   └── MainScaffold (4 bottom tabs)
-      ├── ApprovalsScreen
-      ├── TasksScreen (Phase 2)
-      ├── CostScreen (Phase 3)
-      └── DiagnosticsScreen (Phase 4)
+      ├── ChatScreen           (Phase 5)
+      ├── ApprovalsScreen      (Phase 1, shipped)
+      ├── TasksScreen          (Phase 7: read + create)
+      └── TerminalScreen       (Phase 6: SSH pty)
 
 SeekerZeroService (foreground, specialUse)
-  ├── LongPollClient → /mobile/approvals/stream
-  ├── ConnectionWatchdog → retry/reconnection policy
-  └── NotificationManager → two channels
+  ├── ApprovalsLongPoll    → /mobile/approvals/stream
+  ├── ChatLongPoll         → /mobile/chat/stream (only while Chat is open or unread > 0)
+  ├── ConnectionWatchdog   → retry/reconnection policy, NetworkCallback
+  └── NotificationManager  → two channels (service + approvals)
+
+ChatRepository
+  ├── Room-backed cache (recent ~500 messages per context)
+  ├── tail-merge from /mobile/chat/history on cold open
+  └── delta-apply from /mobile/chat/stream during live session
+
+SshClient
+  ├── Android Keystore-backed Ed25519 keypair (per-device)
+  ├── known_hosts pinned to a0prod's host key (TOFU on first connect)
+  ├── sshj-powered session with a pty channel for TerminalScreen
+  └── no key export paths
 
 ServiceState (singleton, in-memory StateFlow)
   ├── connectionState: StateFlow<ConnectionState>
   ├── pendingApprovals: StateFlow<List<Approval>>
   ├── lastContactAtMs: StateFlow<Long>
-  └── reconnectCount: StateFlow<Int>
+  ├── reconnectCount: StateFlow<Int>
+  └── chatUnreadCount: StateFlow<Int>
 
 MobileApiClient
-  ├── HTTP calls to /mobile/*
+  ├── HTTP calls to /mobile/* (namespace-agnostic buildUrl)
   └── ConnectivityManager.NetworkCallback for radio events
 ```
 
@@ -173,9 +198,9 @@ The long-poll to `/mobile/approvals/stream` runs on a phone over Tailscale. Mobi
 **Android radio integration:** Subscribe to `ConnectivityManager.NetworkCallback` directly.
 - `onLost`: immediately cancel the in-flight HTTP call, pause the retry loop, set connection state to `PAUSED_NO_NETWORK`. Do not burn battery hammering backoff when the radio knows the network is gone.
 - `onAvailable`: resume the long-poll. Increment reconnect counter.
-- Metered cellular (absent `NET_CAPABILITY_NOT_METERED`): keep the long-poll running (one held connection is cheap) but skip background refreshes of the tasks, cost, and diagnostics tabs until the user pulls to refresh.
+- Metered cellular (absent `NET_CAPABILITY_NOT_METERED`): keep the approvals long-poll running (one held connection is cheap) but skip background refreshes of the tasks list and any other non-essential pulls until the user pulls to refresh.
 
-**Offline mark:** After three consecutive retry-exhausted reconnect attempts (~12s total), mark tailnet as offline in Diagnostics, fire one LOW-priority notification ("Lost connection to Agent Zero"), stop retrying until either a `ConnectivityManager` event says the network changed or the user hits the manual reconnect button. Do not hammer forever.
+**Offline mark:** After three consecutive retry-exhausted reconnect attempts (~12s total), set `ServiceState.connectionState = OFFLINE`, fire one LOW-priority notification ("Lost connection to Agent Zero"), stop retrying until either a `ConnectivityManager` event says the network changed or the user hits the manual reconnect button (surfaced in Settings). Do not hammer forever.
 
 ### Offline-gap recovery
 
@@ -203,67 +228,66 @@ Borrowed from SeekerClaw's watchdog cadence, adapted for the long-poll model:
 
 ## v1 surfaces
 
-### Phase 1 — Approval gates (highest leverage)
+### Phase 1 — Approval gates ✅ shipped 2026-04-20
 
-Ships when: a Gmail-send approval raised on a0prod fires a HIGH-priority notification on the Seeker, tap-approve from the lock screen completes the gate, web UI sees it resolved in real time.
+Ships when: an approval raised on a0prod fires a HIGH-priority notification on the Seeker, tap-approve from the lock screen (or the in-app card) completes the gate, server-side `/pending` drains. **Done.** Current state:
+- `/mobile/approvals/{pending,stream,{id}/approve,{id}/reject}` wired, tailnet-peer-gated, atomic-write safe.
+- Server-side approval source is a hand-edited JSON stub on a0prod — the real A0 approval-gate queue will be wired in a later pass (tracked separately; not blocking further phases).
+- Client: real foreground service, long-poll, ConnectionWatchdog with network-callback short-circuit, BootReceiver, ApprovalsScreen with optimistic UI.
+- Not yet wired: `GET /mobile/approvals/{id}` detail endpoint (cards are self-contained enough), notification inline action buttons (tap goes to app), multi-client dismissal broadcasts.
+
+### Phase 5 — Chat
+
+Ships when: typing a prompt on the phone gets the same A0 response you'd see on the web UI, with token-granular streaming, and cold-opening the tab shows recent messages within ~200ms from local cache.
 
 **Server-side work:**
-- Register `seekerzero` as a client type in the approval routing table
-- Implement `/mobile/approvals/pending`, `/mobile/approvals/stream`, `/mobile/approvals/{id}/approve`, `/mobile/approvals/{id}/reject`, `/mobile/approvals/{id}`
-- Implement `/mobile/config/qr` for first-run setup
-- Implement the multi-client coexistence rule (first resolution wins, broadcast dismissals)
+- Implement `/mobile/chat/history`, `/mobile/chat/stream`, `/mobile/chat/send`, `/mobile/chat/contexts`.
+- Decide the contract between the mobile chat namespace and A0's existing chat context machinery. First pass: mobile chat lives in its own named context (e.g. `mobile-seekerzero`) so it doesn't entangle with web UI sessions. Future: let the phone pick a context.
+- Token-stream shape: newline-delimited JSON events on the stream endpoint. Each event is `{type: "user_msg"|"delta"|"final", message_id, role, content|delta, created_at_ms}`.
 
 **App work:**
-- Scaffold the repo, project structure, build.gradle.kts
-- Create the nine shared UI components (below) before any screen is built
-- `SetupScreen`: camera permission → QR scan → parse tailnet config → store in SharedPreferences → ping `/mobile/health` to confirm reachability → request notification permission (API 33+) → battery optimization exemption dialog → done
-- `ApprovalsScreen`: list of pending approvals, detail view, approve/reject actions
-- `SeekerZeroService`: foreground service with `specialUse` type, long-poll loop, retry/reconnection policy, ConnectivityManager integration
-- Notification pipeline with two channels, inline action buttons for approve/reject
-- `BootReceiver` restoring toggle state
+- `ChatScreen`: scrolling message list (LazyColumn, reversed, infinite-scroll upward), input composer pinned to the bottom, send button, attach-approval-context affordance (v1.1 maybe). Assistant messages render streaming tokens with a subtle cursor.
+- `ChatRepository` with Room-backed cache. Schema: `messages(context_id, id, role, content, created_at_ms, is_final)`. Cache keeps last 500 per context.
+- `ChatViewModel`: observes `chatRepository.messagesFlow(contextId)` + sends via `MobileApiClient.chatSend`. Stream consumption happens in the service (background) or the VM (foreground), decided by whether the user has the tab visible.
+- Foreground service runs `ChatLongPoll` only while there's either (a) the Chat tab visible or (b) an unfinished assistant response to collect. It does **not** run permanently — chat is active, not always-on.
 
-### Phase 2 — Scheduled task visibility
+**Out of Phase 5 (punt to 5.1 or later):** multi-context switching UI, file attachments, prompt templates, rich-text rendering beyond Markdown code blocks.
 
-Read-only. The tab shows scheduled tasks with last-run status and next-run time. No editing, no manual triggering.
+### Phase 6 — Terminal (SSH pty to a0prod)
 
-**Server-side:** `/mobile/tasks/scheduled` endpoint reading from Agent Zero's existing `task_scheduler` state.
+Ships when: opening the Terminal tab on the phone connects to a0prod over SSH on the tailnet within ~1 second of first tap (after setup), and you can run `htop` / `vim` / `tmux attach` interactively.
 
-**App:** `TasksScreen` with a simple list using the shared components.
+**Server-side work:**
+- None in A0. Just standard OpenSSH on a0prod host.
+- Operator task: drop SeekerZero's per-device public key (displayed on SetupScreen) into `~/.ssh/authorized_keys` for user `a0user` once per device. Documented in `server/README.md`.
 
-Ships when: scheduled task list on the phone matches `task_scheduler` state on a0prod.
+**App work:**
+- `SshKeyManager`: on first SetupScreen load after QR scan, generate an Ed25519 keypair in Android Keystore (hardware-backed where available; fall back to software-backed on older Seeker models). Private key never leaves the phone. Surface the public key as a copyable block + QR code on SetupScreen for easy desktop paste.
+- `SshClient`: sshj or a lightweight Kotlin SSH library. One session per visible TerminalScreen. pty channel with terminal type `xterm-256color`, reasonable initial size, resize-on-rotation.
+- `TerminalScreen`: Compose wrapper around a terminal emulator widget (options: `AndroidTerminalView` from Termux as a dependency, or a minimal Compose-native renderer; pick during scaffolding). IME input, hardware-keyboard support. Back-gesture exits cleanly and disconnects.
+- `known_hosts` pinned to a0prod's host key on first successful connect (TOFU). Mismatch on reconnect blocks and shows an explicit warning.
+- Biometric gate (BiometricPrompt) on tab open — the terminal is the one surface where "phone in attacker's hand" must not mean "shell on a0prod." Fingerprint or face unlock required before the pty opens. Session is cached for ~5 minutes after successful unlock so tab-switching during active use doesn't re-prompt.
+- Kill-switch: a visible "Disconnect" button in the TerminalScreen top bar.
 
-### Phase 3 — Cost dashboard
+**Security posture:** the terminal tab intentionally widens the blast radius of a lost phone. The biometric gate + screen lock + per-device key (revocable server-side by removing the authorized_keys line) is the layered defense. Remediation on loss: remove device from Tailscale admin + remove the authorized_keys line.
 
-Read-only. Numbers in v1, visualizations in v2.
+### Phase 7 — Scheduled tasks (read + create)
 
-**Server-side:** `/mobile/cost/summary` endpoint reading from the existing 4-type cost tracking.
+Ships when: the phone lists all scheduled tasks with live status, lets the user create a new scheduled task from a form, and the new task shows up in `task_scheduler` and runs on its cron.
 
-**App:** `CostScreen` showing today / 7-day / 30-day rollups, broken down by the four cost types (input, output, cache write, cache read).
+**Server-side work:**
+- `GET /mobile/tasks/scheduled` — list with last-run + next-run + state
+- `GET /mobile/tasks/{id}` — detail (cron, prompt, profile, recent run history)
+- `POST /mobile/tasks` — create. Body validated: cron parses, profile exists, prompt non-empty
+- `POST /mobile/tasks/{id}/run` — ad-hoc run
+- `POST /mobile/tasks/{id}/enable` + `/disable` — state toggle without editing
 
-Ships when: numbers on the phone match the cost tracking source of truth on a0prod.
+**App work:**
+- `TasksScreen`: list of tasks with next-run countdown + state pill + enable/disable toggle + "Run now" button per item.
+- `TaskComposerScreen`: full-screen form. Fields: name, prompt (multiline), cron (with a "common patterns" picker: hourly / daily at / weekly on / custom), profile (dropdown populated from A0), initial state (enabled / disabled).
+- Navigation: Tasks tab has a FAB / top-bar "+ New task" → opens composer → submit → returns to list with the new row highlighted briefly.
 
-### Phase 4 — Diagnostics
-
-The screen that makes SeekerZero feel like a real command center. All data exists server-side already; this just exposes it.
-
-**Server-side:** `/mobile/health` endpoint returning:
-- Subordinate fleet status (a0-think, a0-work, a0-quick, a0-embed — each up/down with last response time)
-- Scheduler health (last run of each scheduled task, error states)
-- Cost posture (today's spend vs typical)
-- "What's wrong right now" natural-language summary from Agent Zero when any subsystem is red
-
-**App:** `DiagnosticsScreen` showing:
-- Connection state (connected / paused-no-network / reconnecting / offline)
-- `lastContactAtMs` as human-readable "last seen Agent Zero X seconds ago"
-- Reconnect counter (session and lifetime)
-- Manual reconnect button (forces long-poll drop and retry)
-- Build identity: versionName + git SHA + build date from `BuildConfig`
-- a0prod reachability + last successful `/mobile/health` response time
-- Subordinate fleet status table
-- Scheduler health summary
-- Cost posture summary
-- "What's wrong right now" string when anything is degraded
-- Toggle state mirror (so you can see connection toggle from this tab)
+**Out of Phase 7 (editing existing tasks):** stays v2. The common case is create + enable/disable + run-now; mutating an existing cron or prompt is rare and the web UI covers it.
 
 ---
 
@@ -308,7 +332,7 @@ Derived from SeekerClaw's `build.gradle.kts` with aggressive subtractions.
 - CameraX (`camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-view`) at version 1.4.1
 - `com.journeyapps:zxing-android-embedded:4.3.0` for QR scanning (includes CameraX integration, no Google Play Services)
 - ProGuard/R8 minify + shrinkResources on release
-- `BuildConfig` fields injected at build time: `versionName`, `versionCode`, git SHA (short), build date (ISO). The Diagnostics tab reads these directly.
+- `BuildConfig` fields injected at build time: `versionName`, `versionCode`, git SHA (short), build date (ISO). Surfaced in the Settings screen's "About" section.
 
 **Delete:**
 - NDK / CMake / `externalNativeBuild` (no native code)
@@ -376,13 +400,17 @@ Other activities:
 /data/data/dev.seekerzero.app/
 ├── files/
 │   ├── logs/                # LogCollector output, rotated at 5MB
-│   └── cache/               # Cached approval details, cost data, etc.
-├── shared_prefs/
-│   └── seekerzero_prefs.xml # Config + toggle state + lastContactAtMs
-└── (no databases, no workspace, no skills)
+│   └── cache/               # Cached approval details, task detail, etc.
+├── databases/
+│   └── chat.db              # Room: messages(context_id, id, role, content, ts, is_final)
+│                            # + known_hosts(host, fingerprint) for SSH TOFU
+└── shared_prefs/
+    └── seekerzero_prefs.xml # Config + toggle state + lastContactAtMs + last-seen-chat-id
 ```
 
-Deliberately minimal. No SQLite, no databases, no workspace directory. Everything beyond SharedPreferences is cache that can be rebuilt from `/mobile/*` at any time.
+**Secrets:** the SSH private key lives in **Android Keystore**, not the filesystem, addressed by alias. It never appears in `files/`, `databases/`, or `shared_prefs/`. Claude/OpenAI API keys are never stored — the phone does not call those APIs.
+
+Everything in `files/` and `databases/` is cache that can be rebuilt from `/mobile/*` or from a fresh Keystore keygen.
 
 ---
 
@@ -399,31 +427,37 @@ seekerzero/
 │   │   │   │   ├── theme/                       # Dark theme, Material 3, locked color tokens
 │   │   │   │   ├── components/                  # Shared UI component library (9 components)
 │   │   │   │   ├── navigation/NavGraph.kt       # Setup → Main (4 tabs)
-│   │   │   │   ├── setup/SetupScreen.kt         # QR scan, manual entry, permissions flow
-│   │   │   │   ├── approvals/ApprovalsScreen.kt
-│   │   │   │   ├── tasks/TasksScreen.kt         # Phase 2
-│   │   │   │   ├── cost/CostScreen.kt           # Phase 3
-│   │   │   │   ├── diagnostics/DiagnosticsScreen.kt  # Phase 4
+│   │   │   │   ├── setup/SetupScreen.kt         # QR scan → SSH pubkey enrollment → permissions
+│   │   │   │   ├── approvals/                   # Phase 1 (shipped)
+│   │   │   │   ├── chat/                        # Phase 5: ChatScreen + ChatViewModel + composer
+│   │   │   │   ├── tasks/                       # Phase 7: list + composer
+│   │   │   │   ├── terminal/                    # Phase 6: TerminalScreen + emulator widget
 │   │   │   │   └── settings/
 │   │   │   │       ├── SettingsScreen.kt
 │   │   │   │       └── SettingsHelpTexts.kt     # Mirrors docs/internal/SETTINGS_INFO.md
 │   │   │   ├── service/
-│   │   │   │   ├── SeekerZeroService.kt         # Foreground service, specialUse, long-poll loop
+│   │   │   │   ├── SeekerZeroService.kt         # Foreground service, specialUse, approvals long-poll
 │   │   │   │   └── ConnectionWatchdog.kt        # Retry/reconnection policy
 │   │   │   ├── api/
-│   │   │   │   ├── MobileApiClient.kt           # Ktor or OkHttp client for /mobile/*
-│   │   │   │   ├── LongPollClient.kt            # /mobile/approvals/stream with since param
+│   │   │   │   ├── MobileApiClient.kt           # OkHttp client for /mobile/*
 │   │   │   │   └── models/                      # @Serializable data classes
+│   │   │   ├── chat/
+│   │   │   │   ├── ChatRepository.kt            # Room-backed cache + tail-merge
+│   │   │   │   └── ChatDatabase.kt              # Room schema
+│   │   │   ├── ssh/
+│   │   │   │   ├── SshKeyManager.kt             # Keystore-backed Ed25519
+│   │   │   │   ├── SshClient.kt                 # sshj wrapper, pty channel
+│   │   │   │   └── KnownHostsStore.kt           # TOFU pinning of a0prod host key
 │   │   │   ├── receiver/
 │   │   │   │   └── BootReceiver.kt              # Restore toggle state on reboot
 │   │   │   ├── config/
-│   │   │   │   ├── ConfigManager.kt             # SharedPreferences, no Keystore
-│   │   │   │   └── QrParser.kt                  # Plain JSON parse, no decryption
+│   │   │   │   ├── ConfigManager.kt             # SharedPreferences (no keys here)
+│   │   │   │   └── QrParser.kt                  # Plain JSON parse
 │   │   │   ├── qr/
 │   │   │   │   └── QrScannerActivity.kt         # Portrait, excludeFromRecents
 │   │   │   └── util/
 │   │   │       ├── LogCollector.kt              # In-memory ring buffer + local file
-│   │   │       └── ServiceState.kt              # ~20 lines, pure StateFlow
+│   │   │       └── ServiceState.kt              # Pure StateFlow
 │   │   ├── res/
 │   │   │   └── values/strings.xml               # Mirrors docs/internal/TEMPLATES.md
 │   │   └── AndroidManifest.xml
@@ -468,14 +502,17 @@ Generated by `/mobile/config/qr` endpoint on a0prod. User opens the URL in a bro
 1. User sideloads the APK.
 2. Opens the app → sees welcome screen.
 3. Taps "Scan QR" → requests `CAMERA` permission → opens `QrScannerActivity`.
-4. Points at the QR on a0prod's `/mobile/config/qr` page.
+4. Points at the QR from `/mobile/config/qr` (or the `tools/generate_qr.py` PNG).
 5. App parses the payload, stores to SharedPreferences.
 6. App calls `GET /mobile/health` to confirm reachability.
-7. On success: requests notification permission (API 33+).
-8. Shows battery optimization exemption dialog → opens Android settings to grant it.
-9. Lands on the main screen with the toggle off. User flips it on to go live.
+7. **SSH enrollment step:** app generates an Ed25519 keypair in Android Keystore (alias `seekerzero_ssh_v1`) if one doesn't already exist. Shows the public key as: (a) a copyable text block with a big "Copy" button, and (b) a smaller QR encoding the same line, for the rare case the user wants to SSH-paste via their desktop. Instructs: *"SSH into a0prod once and append this line to ~/.ssh/authorized_keys. Tap Continue when done."*
+8. App requests notification permission (API 33+).
+9. Shows battery optimization exemption dialog → opens Android settings to grant it.
+10. Lands on the main screen with the service toggle off. User flips it on to go live.
 
-If any step fails (QR parse error, health check fail, permission denied), show a clear error message with a retry button. Manual entry fallback for the tailnet host is available but hidden behind a "Can't scan?" link.
+If any step fails (QR parse error, health check fail, SSH test-connect fail, permission denied), show a clear error message with a retry button. Manual entry fallback for the tailnet host is available but hidden behind a "Can't scan?" link.
+
+**Test-connect after SSH enrollment (optional):** on "Continue", the app may attempt a no-op SSH handshake to a0prod. If it succeeds, the Terminal tab is unlocked; if it fails (authorized_keys not updated yet), show a clear "Can't reach a0prod over SSH — check authorized_keys and retry" banner without blocking the rest of the app. Terminal tab then shows the same banner until SSH works.
 
 ---
 
@@ -499,7 +536,7 @@ Adopted from SeekerClaw. Two separate files at repo root, both read by Claude Co
 - Approval notification titles and action button labels
 - Setup flow copy (welcome, QR prompt, success, error states)
 - Empty states per tab ("No pending approvals", "No scheduled tasks", etc.)
-- Diagnostics red-state summaries ("A0 unreachable", "Subordinate a0-think down", etc.)
+- Connection-state red summaries ("A0 unreachable", "SSH to a0prod refused", etc.) wherever they surface
 
 Mirrors Android `res/values/strings.xml`. Update markdown first, sync to XML. Gives lint coverage from strings.xml and free translation support if we ever add i18n.
 
@@ -511,35 +548,49 @@ The foreground notification is the single most-seen string in the whole app. See
 
 ## Security considerations
 
-- No API keys stored in the app. No Android Keystore usage. No AES. The Tailscale layer is the entire auth story.
-- `android:allowBackup="false"` prevents ADB backup from exfiltrating the tailnet config.
-- `/mobile/*` endpoints on a0prod verify the request comes from a tailnet peer at the network layer before accepting.
-- If the Seeker is lost or compromised, the remediation is: remove the device from the Tailscale admin panel. All `/mobile/*` calls from that device immediately fail auth. No credential rotation, no key revocation, no dance.
+SeekerZero v3 intentionally widens the blast radius relative to v2 (terminal access, task creation, chat). The defense-in-depth layout:
+
+**Layer 1 — Tailscale network identity.** `/mobile/*` endpoints on a0prod verify the request comes from a 100.x tailnet peer before accepting. SSH (port 22 on a0prod) is reachable only over the tailnet — a0prod's UFW/iptables policy already restricts port 22 to the tailnet interface.
+
+**Layer 2 — Per-device SSH key in Android Keystore.** The private key is generated on-device, hardware-backed where the Seeker's StrongBox allows, and never leaves the phone. No backup, no export. The public key is dropped into a0prod's `~/.ssh/authorized_keys` manually during setup. Revocation on device loss: remove that one line from authorized_keys (in addition to removing the device from Tailscale admin).
+
+**Layer 3 — Android screen lock.** The phone's own lock screen is the primary gate against "lost phone in someone else's hand." Apps inside an unlocked phone can access /mobile/* freely; this is fine because the screen lock is the assumed barrier.
+
+**Layer 4 — Biometric prompt on Terminal tab.** Even with the phone unlocked, opening the Terminal tab requires BiometricPrompt (fingerprint or face). This bounds the worst case where the phone is handed to someone briefly. Cached for ~5 minutes of active terminal use to avoid re-prompting during tab-switching mid-session.
+
+**Layer 5 — Audit trail on a0prod.** All `/mobile/*` actions tag origin `seekerzero` with the device's `client_id`. SSH logins are captured by standard OpenSSH logging. The `audit.log` visible from Diagnostics (v2) surfaces both streams.
+
+**What SeekerZero still does NOT store:** Claude/OpenAI/Gemini API keys; plaintext A0 `secrets.env` contents; Telegram bot tokens; Solana wallet material; anything that would let an attacker *originate* actions against external services without already being inside A0. The phone is a control surface, not a keyring.
+
+**Anti-features (explicitly absent):**
+- No `android:allowBackup` (`="false"` in manifest). ADB backup cannot exfiltrate.
+- No cloud sync of any kind.
 - No telemetry, no crash reporting, no analytics. Nothing about the user's A0 activity leaves the tailnet.
+- No remote kill-switch for the app (beyond Tailscale device revocation). Intentional — a remote kill channel is itself a supply-chain risk.
 
 ---
 
 ## Out of scope for v1
 
-- Sending prompts or messages to Agent Zero from the phone (that's Telegram and web UI's job — Phase 4+ if ever)
-- Editing scheduled tasks (v2)
-- Cost charts or visualizations (v2 — numbers only in v1)
-- Any on-device AI inference
-- Solana Mobile Stack integration of any kind
-- Solana wallet, blockchain interaction, x402, agent payments
-- Device-as-capability (`/device/*` inverse API exposing GPS, camera, SMS, clipboard back to A0) — v2, but `/mobile/*` and the foreground service are designed to accommodate a sibling `/device/*` namespace without restructuring
-- iOS, desktop, Wear OS, tablet-specific layouts
-- Firebase, Crashlytics, telemetry of any kind
-- Encryption of config at rest (no secrets)
-- Play Store or dApp Store distribution
-- In-app chat UI with A0
-- Bulk action tiles on the Approvals tab (swipe-triage)
-- Per-byte cellular bandwidth accounting
-- Catchup *execution* of anything missed while offline (SZ approves; it never runs anything on its own)
-- Multi-language support
-- Light theme
-- Widgets
-- Merging with the benched Seeker dapp project
+- Cost dashboard (the old Phase 3) — cut from v3. Revisit as a v2 widget if it earns its way back.
+- Dedicated Diagnostics tab (the old Phase 4) — cut. Its data (connection state, reconnect counter, build SHA, last-contact time) surfaces inline on relevant tabs or in Settings; a standalone tab is not load-bearing.
+- Editing existing scheduled tasks (create yes, edit no). Web UI covers the rare edit case.
+- Any on-device AI inference. No local models, no embeddings, no reasoning on the phone.
+- Solana Mobile Stack integration of any kind.
+- Solana wallet, blockchain interaction, x402, agent payments.
+- Device-as-capability (`/device/*` inverse API exposing GPS, camera, SMS, clipboard back to A0) — v2, but `/mobile/*` and the foreground service are designed to accommodate a sibling `/device/*` namespace without restructuring.
+- iOS, desktop, Wear OS, tablet-specific layouts.
+- Firebase, Crashlytics, telemetry of any kind.
+- Play Store or dApp Store distribution.
+- Bulk action tiles on the Approvals tab (swipe-triage).
+- Per-byte cellular bandwidth accounting.
+- Auto-execution of anything missed while offline (user still decides).
+- Multi-language support.
+- Light theme.
+- Home-screen widgets.
+- Merging with the benched Seeker dapp project.
+- Password-authenticated SSH (key-only; no agent forwarding either).
+- Paste of arbitrary SSH keys from other devices into the app (keygen only happens in-app; keys are per-device).
 
 ---
 
@@ -553,22 +604,34 @@ SeekerClaw's "Android Bridge" exposes phone capabilities (GPS, camera, SMS, clip
 - A0 needs vision analysis → asks SeekerZero → phone captures a photo and uploads
 - A0 wants to read or write clipboard → SeekerZero is the bridge
 
-This makes SeekerZero a two-way client: UI inbound (you → A0), capabilities outbound (A0 → phone). Same tailnet, same auth, same foreground service (already running when toggled on).
+This makes SeekerZero a two-way client: UI inbound (you → A0), capabilities outbound (A0 → phone). Same tailnet, same auth, same foreground service (already running when toggled on). Design `/mobile/*` and the foreground service so a sibling `/device/*` namespace can be added without restructuring. In practice this means the `MobileApiClient` and `SeekerZeroService` are both namespace-agnostic — they don't hardcode `/mobile` as the only API path.
 
-This is the one idea from SeekerClaw worth architecting around now. Specifically: design `/mobile/*` and the foreground service so a sibling `/device/*` namespace can be added without restructuring. In practice this means the `MobileApiClient` and `SeekerZeroService` are both namespace-agnostic — they don't hardcode `/mobile` as the only API path.
+### Edit existing scheduled tasks
 
-### Session chat / recent A0 activity feed
-
-Read-only feed of recent A0 activity (what the agent just did, what's running, what finished) on the home screen. Makes opening the app feel useful even with no pending approvals. v2.
+v1 ships create + enable/disable + run-now. Editing cron/prompt/profile is v2.
 
 ### Bulk action tiles on Approvals
 
 When 5+ approvals from the same source are pending, show a "Review all Gmail replies" tile that opens a focused queue view — swipe-right approve, swipe-left reject, undo bar. Same UX shape as email triage apps. v2 or v3.
 
+### File attachments in Chat
+
+Send an image or short audio clip from the phone into the Chat context. Requires deciding how A0 stores and retrieves attachments — non-trivial. v2.
+
+### Multi-context chat
+
+v1 pins mobile chat to a single `mobile-seekerzero` context. v2 lets the phone pick among A0's active contexts (or start a new one), giving the web UI and the phone parity on context management.
+
 ---
 
 ## Bottom line
 
-SeekerZero v1 is a thin Kotlin/Compose Android client that joins the existing tailnet, talks to a dedicated `/mobile/*` JSON API on Agent Zero, and gives the phone four surfaces: approvals (highest leverage, ties into Gmail Phase 3 and TaskMarket), scheduled task visibility (read-only), cost dashboard (numbers only), and diagnostics. The whole thing is architected around being *the opposite* of SeekerClaw — no on-device agent, no Node runtime, no subprocess, no cross-process IPC, no wallet, no secrets, no telemetry, minimal persistent state. The simplifications available to us because we chose this architecture are substantial and should be defended actively.
+SeekerZero v3 is a full Agent Zero client on the Solana Seeker: chat (token-streamed), approvals (end-to-end shipped), scheduled tasks (read + create), and a terminal (SSH pty to a0prod). Everything flows over the existing Tailscale tailnet; the tailnet is the transport auth layer and SSH's per-device Keystore-backed Ed25519 key is the terminal-tier identity. No on-device AI, no Node runtime, no subprocess, no wallet, no Solana Mobile Stack, no Play Store, no telemetry. Minimal persistent state — Room DB for chat cache, SharedPreferences for config, Android Keystore for the one secret that does live on the phone. Claude/OpenAI API keys are never stored; the phone never calls those APIs.
 
-The build order is: scaffold repo and build config → create the shared UI component library → wire the first-run setup flow with QR → implement the foreground service and long-poll with retry policy → ship Phase 1 (approvals) end-to-end → then Phases 2, 3, 4 in order.
+**Build order from here:**
+1. Phase R (this redraft) ✅
+2. Phase 5 — Chat (server-side `/mobile/chat/*`, ChatScreen, Room cache)
+3. Phase 6 — Terminal (SSH keygen + enrollment flow, TerminalScreen, biometric gate)
+4. Phase 7 — Tasks read+write (server-side POST endpoints, TaskComposerScreen)
+
+Later, not in v1: real approval-gate wiring on a0prod (replace the stub file), `/mobile/approvals/{id}` detail endpoint, `/mobile/config/qr` server-side renderer, notification inline action buttons, multi-client dismissal broadcasts.

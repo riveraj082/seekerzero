@@ -4,9 +4,9 @@
 
 ## What is this project
 
-**SeekerZero** is a native Android app (Kotlin + Jetpack Compose) that runs on the Solana Seeker phone. It is a thin client for **Agent Zero** (the user's local AI orchestration system running on `a0prod` at `a0prod.your-tailnet.ts.net`). The phone joins the existing Tailscale tailnet and talks to Agent Zero over a dedicated `/mobile/*` JSON API. The app's job is to show pending approval gates, scheduled tasks, cost data, and diagnostics — and to let the user approve or reject gates from the lock screen.
+**SeekerZero** is a native Android app (Kotlin + Jetpack Compose) that runs on the Solana Seeker phone. It is a full **Agent Zero** client (local AI orchestration system running on `a0prod` at `a0prod.your-tailnet.ts.net`). The phone joins the existing Tailscale tailnet and talks to Agent Zero over a dedicated `/mobile/*` JSON API plus direct SSH to the a0prod host. The app's v1 surfaces are: **Chat** (freeform prompts with token-streamed responses), **Approvals** (shipped: pending gates + approve/reject), **Tasks** (read + create scheduled tasks), and **Terminal** (SSH pty to a0prod).
 
-SeekerZero does **not** run any AI on the phone, does **not** interact with the Solana blockchain, and does **not** talk to Telegram, Claude, OpenAI, or any third party. Everything flows through Agent Zero over the tailnet.
+SeekerZero does **not** run any AI on the phone, does **not** interact with the Solana blockchain, and does **not** talk to Telegram, Claude, OpenAI, or any third party directly. All AI work happens server-side in Agent Zero; the phone is the control surface.
 
 The project is personal, in-house, and sideload-only. No CI/CD, no Play Store, no dApp Store. Source is tracked in a private GitHub repo for change history only; distribution remains sideload via ADB.
 
@@ -26,16 +26,17 @@ The project is personal, in-house, and sideload-only. No CI/CD, no Play Store, n
 
 These are the things that must stay true across every session. If a change would break any of these, stop and raise it instead of proceeding.
 
-1. **Tailscale is the only transport.** No plaintext HTTP over the internet, no WireGuard, no custom TLS, no API keys, no OAuth, no bearer tokens. The tailnet is the auth layer.
-2. **No secrets on the phone.** SharedPreferences only. No Android Keystore, no AES, no encryption at rest. Config is just a tailnet hostname and a client ID — nothing sensitive to protect.
-3. **Service runs in the main app process.** No `:node` subprocess. No cross-process file-based IPC. All state is in-memory `StateFlow`. If a feature seems to need a second process, it doesn't.
+1. **Tailscale is the only network transport.** No plaintext HTTP over the internet, no WireGuard-beside-Tailscale, no custom TLS, no Claude/OpenAI API keys, no OAuth, no bearer tokens. The tailnet is the network auth layer for `/mobile/*` and for SSH to a0prod.
+2. **Minimal secrets on the phone, key material only in Keystore.** The SSH private key is the only secret that lives on the device; it stays in Android Keystore (hardware-backed where possible), never the filesystem. SharedPreferences holds config + toggle state + last-contact timestamps; the Room chat cache holds recent messages. No Claude/OpenAI API keys, no `secrets.env` contents, no Telegram tokens, no wallet material — ever.
+3. **Service runs in the main app process.** No `:node` subprocess. No cross-process file-based IPC. All state is in-memory `StateFlow` or a small Room DB (chat cache). If a feature seems to need a second process, it doesn't.
 4. **No telemetry, ever.** No Firebase, no Crashlytics, no analytics, no Google Play Services, no crash reporting, no phone-home. `LogCollector` writes to an in-memory ring buffer and a local file, period.
 5. **No blockchain, no wallet, no Solana Mobile Stack.** SeekerZero is not a dapp. The Seeker is treated as a normal Android phone. If wallet features come up, they belong to the separate (benched) Seeker dapp project.
 6. **Shared UI components only.** Screens use the components in `ui/components/` plus Material 3 primitives. No inline custom widgets. If you need a new shared component, add it to `ui/components/` first, then use it.
 7. **`CardSurface` never takes a padding parameter.** It enforces background color and corner shape only. Callers pass padding via modifier. This rule was learned from SeekerClaw's debt audit; do not relearn it.
-8. **Agent Zero is the only remote.** The app talks to `/mobile/*` on a0prod. It does not reach any other host.
-9. **SeekerZero approves, it does not execute.** The app never runs tasks, executes code, drafts messages to send, or takes actions on the user's behalf beyond approving/rejecting gates that Agent Zero raised. Agent Zero does the work; the phone is a remote control.
-10. **`specialUse` foreground service type.** Not `dataSync`, not `mediaPlayback`. With the matching `FOREGROUND_SERVICE_SPECIAL_USE` permission.
+8. **Agent Zero is the only remote over `/mobile/*`; SSH goes directly to a0prod.** The app does not reach any other host. A0 doesn't mediate the terminal session — that's plain OpenSSH on a0prod, keyed by the per-device Ed25519 pair.
+9. **`specialUse` foreground service type.** Not `dataSync`, not `mediaPlayback`. With the matching `FOREGROUND_SERVICE_SPECIAL_USE` permission.
+10. **Biometric gate on Terminal tab.** Opening TerminalScreen requires `BiometricPrompt` (fingerprint or face). Cached for ~5 minutes of active terminal use. This is the non-negotiable defense against "phone handed to someone for 30 seconds" becoming shell access on a0prod.
+11. **SSH keygen is on-device only; never import or export keys.** Keypair is created in Keystore on first run; the public key is displayed for user copy-paste into a0prod's `authorized_keys`; the private key never leaves the phone. If the phone is reset or reinstalled, a new keypair is generated and the old line in `authorized_keys` is stale and should be removed.
 
 ## Build & run
 
@@ -66,18 +67,20 @@ seekerzero/
 │   │   │   │   ├── theme/                       # Dark theme, Material 3
 │   │   │   │   ├── components/                  # Shared UI component library (9 components)
 │   │   │   │   ├── navigation/                  # NavGraph
-│   │   │   │   ├── setup/                       # First-run QR scan + manual entry
-│   │   │   │   ├── approvals/                   # Phase 1
-│   │   │   │   ├── tasks/                       # Phase 2 (read-only)
-│   │   │   │   ├── cost/                        # Phase 3 (read-only)
-│   │   │   │   ├── diagnostics/                 # Phase 4
+│   │   │   │   ├── setup/                       # First-run QR + SSH pubkey enrollment
+│   │   │   │   ├── approvals/                   # Phase 1 (shipped)
+│   │   │   │   ├── chat/                        # Phase 5
+│   │   │   │   ├── tasks/                       # Phase 7 (read + create)
+│   │   │   │   ├── terminal/                    # Phase 6
 │   │   │   │   └── settings/
 │   │   │   ├── service/                         # Foreground service + connection watchdog
-│   │   │   ├── api/                             # /mobile/* client, long-poll, @Serializable models
+│   │   │   ├── api/                             # /mobile/* client, @Serializable models
+│   │   │   ├── chat/                            # ChatRepository + Room DB
+│   │   │   ├── ssh/                             # Keystore Ed25519, sshj client, known_hosts
 │   │   │   ├── receiver/                        # BootReceiver
 │   │   │   ├── config/                          # ConfigManager (SharedPrefs), QrParser
 │   │   │   ├── qr/                              # QrScannerActivity (isolated)
-│   │   │   └── util/                            # LogCollector, ServiceState (~20 lines, StateFlow only)
+│   │   │   └── util/                            # LogCollector, ServiceState
 │   │   ├── res/values/strings.xml               # Mirrors docs/internal/TEMPLATES.md
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts                         # Target ~80 lines
@@ -134,7 +137,7 @@ Two channels, created in `SeekerZeroApplication.onCreate`:
 - `seekerzero_service` (LOW, silent, no badge): persistent "Connected to Agent Zero" notification while the foreground service is running.
 - `seekerzero_approvals` (HIGH, sound, badge): new approval gates only.
 
-**The only notifications that fire are approval-related.** Routine A0 events, scheduled task runs, cost threshold crossings, and heartbeats do **not** fire notifications. The phone stays quiet unless there is something the user genuinely needs to act on.
+**Approval-raised is the only event that fires a sound/vibration notification.** Routine A0 events, scheduled task runs, task completions, and chat assistant responses do **not** fire sound/badge notifications. Chat replies arrive silently — if the user isn't looking at the Chat tab, the reply just waits. The phone stays quiet unless there is something the user genuinely needs to act on immediately.
 
 The foreground notification text is utilitarian: *"SeekerZero · Connected to Agent Zero"*. No emoji, no personality. This is a command surface, not a companion.
 
@@ -144,30 +147,34 @@ The foreground notification text is utilitarian: *"SeekerZero · Connected to Ag
 /data/data/dev.seekerzero.app/
 ├── files/
 │   ├── logs/                    # LogCollector output, rotated at 5MB
-│   └── cache/                   # Cached approval details, cost data
+│   └── cache/                   # Cached approval details, task detail
+├── databases/
+│   └── chat.db                  # Room: messages + known_hosts (SSH TOFU)
 └── shared_prefs/
-    └── seekerzero_prefs.xml     # Config + toggle state + lastContactAtMs
+    └── seekerzero_prefs.xml     # Config + toggle + lastContactAtMs + last-seen-chat-id
 ```
 
-No SQLite, no workspace directory, no skills folder. Intentionally minimal.
+Secrets are NOT in any of the above. The SSH private key lives in **Android Keystore** (alias `seekerzero_ssh_v1`), never the filesystem. No Claude/OpenAI API keys, no wallet material, no skills folder, no workspace.
 
 ## What NOT to build (v1)
 
-- Sending prompts or messages to Agent Zero from the phone. SeekerZero displays and approves; it does not chat.
-- Editing scheduled tasks. Read-only.
-- Cost charts or visualizations. Numbers only.
+- Cost dashboard or charts (cut from v3).
+- Standalone Diagnostics tab (inlined on other tabs / Settings instead).
+- Editing existing scheduled tasks (create + enable/disable + run-now are in scope; mutating cron/prompt after the fact is v2).
 - On-device AI of any kind.
 - Solana Mobile Stack, wallet, or blockchain features.
 - iOS, desktop, Wear OS, tablet-specific layouts.
 - Firebase, Crashlytics, analytics, telemetry.
-- Config encryption at rest.
 - Play Store / dApp Store distribution.
-- In-app chat UI with A0.
 - Multi-language support.
 - Light theme.
-- Widgets.
+- Home-screen widgets.
 - A `padding` parameter on `CardSurface`.
 - Cross-process IPC of any kind.
+- Password-authenticated SSH (key-only).
+- Importing SSH keys generated elsewhere (on-device keygen only).
+- Agent forwarding over the terminal SSH session.
+- Remote kill-switch for the app (beyond Tailscale device revocation).
 
 ## Pitfalls learned from prior art (SeekerClaw)
 
