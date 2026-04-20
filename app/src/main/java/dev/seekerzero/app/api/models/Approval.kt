@@ -27,3 +27,11 @@ data class ApprovalsStreamResponse(
     @SerialName("server_time_ms") val serverTimeMs: Long,
     @SerialName("next_since_ms") val nextSinceMs: Long
 )
+
+@Serializable
+data class ApprovalActionResponse(
+    val ok: Boolean,
+    val id: String,
+    val resolution: String,
+    @SerialName("resolved_at_ms") val resolvedAtMs: Long
+)

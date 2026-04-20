@@ -189,7 +189,9 @@ class SeekerZeroService : Service() {
                     LogCollector.d(TAG, "stream: +${resp.approvals.size} approvals (new=${trulyNew.size})")
                 }
             }.onFailure { err ->
-                ServiceState.setConnectionState(ConnectionState.RECONNECTING)
+                if (ServiceState.connectionState.value != ConnectionState.PAUSED_NO_NETWORK) {
+                    ServiceState.setConnectionState(ConnectionState.RECONNECTING)
+                }
                 ServiceState.incrementReconnectCount()
                 LogCollector.w(TAG, "stream error: ${err.message}")
                 watchdog.waitBeforeRetry()

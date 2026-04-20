@@ -40,6 +40,10 @@ object ServiceState {
         _pendingApprovals.value = list
     }
 
+    fun removeApproval(id: String) {
+        _pendingApprovals.value = _pendingApprovals.value.filterNot { it.id == id }
+    }
+
     fun incrementReconnectCount() {
         _reconnectCount.value = _reconnectCount.value + 1
     }

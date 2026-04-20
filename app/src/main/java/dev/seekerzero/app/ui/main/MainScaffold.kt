@@ -36,11 +36,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.seekerzero.app.service.SeekerZeroService
+import dev.seekerzero.app.ui.approvals.ApprovalsScreen
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
-import dev.seekerzero.app.ui.components.StatusDot
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
-import dev.seekerzero.app.util.ConnectionState
-import dev.seekerzero.app.util.ServiceState
 
 private data class TabDef(
     val route: String,
@@ -104,7 +102,7 @@ fun MainScaffold() {
                 .padding(pad)
         ) {
             NavHost(navController = navController, startDestination = "approvals") {
-                composable("approvals") { ApprovalsScreenStub() }
+                composable("approvals") { ApprovalsScreen() }
                 composable("tasks") { TasksScreenStub() }
                 composable("cost") { CostScreenStub() }
                 composable("diagnostics") { DiagnosticsScreenStub() }
@@ -113,38 +111,6 @@ fun MainScaffold() {
     }
 }
 
-@Composable
-private fun ApprovalsScreenStub() {
-    val state by ServiceState.connectionState.collectAsStateWithLifecycle()
-    val pending by ServiceState.pendingApprovals.collectAsStateWithLifecycle()
-    SeekerZeroScaffold(title = stringResource(R.string.tab_approvals)) { pad ->
-        Box(
-            modifier = Modifier.fillMaxSize().padding(pad),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                StatusDot(
-                    color = when (state) {
-                        ConnectionState.CONNECTED -> SeekerZeroColors.Success
-                        ConnectionState.RECONNECTING -> SeekerZeroColors.Warning
-                        ConnectionState.PAUSED_NO_NETWORK -> SeekerZeroColors.Warning
-                        ConnectionState.OFFLINE -> SeekerZeroColors.Error
-                        ConnectionState.DISCONNECTED -> SeekerZeroColors.TextDisabled
-                    },
-                    size = 10.dp,
-                    pulsing = state == ConnectionState.RECONNECTING
-                )
-                Text(
-                    text = "${state.name.lowercase().replaceFirstChar { it.uppercase() }} • ${pending.size} pending",
-                    color = SeekerZeroColors.TextSecondary
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun TasksScreenStub() = TabStub(

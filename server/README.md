@@ -13,9 +13,16 @@ start.
   - `GET /mobile/approvals/stream?since=<ms>` — long-poll, 60s hold, 24h
     lookback cap on `since`. Returns approvals with
     `created_at_ms > effective_since`.
+  - `POST /mobile/approvals/{id}/approve` — resolves the gate as
+    approved; removes it from the stub list. Returns
+    `{ok, id, resolution, resolved_at_ms}`. 404 if id not found.
+  - `POST /mobile/approvals/{id}/reject` — same shape, resolution
+    `rejected`.
 - `stub_approvals.json` — sample approval list. Deploys to
   `/a0/usr/seekerzero/stub_approvals.json` on a0prod. Edit to change what
-  the phone sees; the handler reads it on every request.
+  the phone sees; the handler reads it on every request. Writes go
+  through a module-level `threading.Lock` + atomic rename so a
+  concurrent `/stream` read never sees a partial file.
 
 ## Approval schema (v1)
 

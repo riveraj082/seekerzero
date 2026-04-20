@@ -1,5 +1,6 @@
 package dev.seekerzero.app.api
 
+import dev.seekerzero.app.api.models.ApprovalActionResponse
 import dev.seekerzero.app.api.models.ApprovalsPendingResponse
 import dev.seekerzero.app.api.models.ApprovalsStreamResponse
 import dev.seekerzero.app.api.models.HealthResponse
@@ -12,6 +13,7 @@ import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -66,6 +68,21 @@ object MobileApiClient {
         val body = execute(streamClient, request)
         json.decodeFromString(ApprovalsStreamResponse.serializer(), body)
     }.onFailure { LogCollector.w(TAG, "approvalsStream() failed: ${it.message}") }
+
+    suspend fun approvalsApprove(id: String): Result<ApprovalActionResponse> = postAction(id, "approve")
+
+    suspend fun approvalsReject(id: String): Result<ApprovalActionResponse> = postAction(id, "reject")
+
+    private suspend fun postAction(id: String, verb: String): Result<ApprovalActionResponse> = runCatching {
+        val url = buildUrl("/approvals/$id/$verb")
+        LogCollector.d(TAG, "POST $url")
+        val request = Request.Builder()
+            .url(url)
+            .post("".toRequestBody())
+            .build()
+        val body = execute(client, request)
+        json.decodeFromString(ApprovalActionResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "approvals $verb $id failed: ${it.message}") }
 
     private fun buildUrl(pathSuffix: String): String {
         val rawHost = ConfigManager.a0Host

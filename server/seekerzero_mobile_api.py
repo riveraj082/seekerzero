@@ -9,6 +9,7 @@
 # copied into /a0/python/api/ by agent-zero-post-start.sh.
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,8 @@ _STUB_FILE = Path('/a0/usr/seekerzero/stub_approvals.json')
 _LONG_POLL_MAX_S = 60.0
 _POLL_INTERVAL_S = 0.5
 _SINCE_LOOKBACK_CAP_MS = 24 * 60 * 60 * 1000
+
+_stub_write_lock = threading.Lock()
 
 
 def _client_ip() -> str:
@@ -58,6 +61,31 @@ def _load_stub_approvals() -> List[Dict[str, Any]]:
         return data if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def _write_stub_approvals(approvals: List[Dict[str, Any]]) -> None:
+    tmp = _STUB_FILE.with_suffix(_STUB_FILE.suffix + '.tmp')
+    with _stub_write_lock:
+        tmp.write_text(json.dumps(approvals, indent=2), encoding='utf-8')
+        tmp.replace(_STUB_FILE)
+
+
+def _resolve_stub_approval(approval_id: str, resolution: str) -> Optional[Dict[str, Any]]:
+    with _stub_write_lock:
+        approvals = _load_stub_approvals()
+        match = next((a for a in approvals if a.get('id') == approval_id), None)
+        if match is None:
+            return None
+        remaining = [a for a in approvals if a.get('id') != approval_id]
+        tmp = _STUB_FILE.with_suffix(_STUB_FILE.suffix + '.tmp')
+        tmp.write_text(json.dumps(remaining, indent=2), encoding='utf-8')
+        tmp.replace(_STUB_FILE)
+        return {
+            'id': approval_id,
+            'resolution': resolution,
+            'resolved_at_ms': int(time.time() * 1000),
+            'approval': match,
+        }
 
 
 def _filter_since(approvals: List[Dict[str, Any]], since_ms: int) -> List[Dict[str, Any]]:
@@ -144,6 +172,33 @@ def _stream_view():
         time.sleep(_POLL_INTERVAL_S)
 
 
+def _resolution_view(approval_id: str, resolution: str) -> Response:
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    if resolution not in ('approved', 'rejected'):
+        return _bad_request('unknown resolution')
+    result = _resolve_stub_approval(approval_id, resolution)
+    if result is None:
+        body = json.dumps({'ok': False, 'error': 'approval not found', 'id': approval_id})
+        return Response(body, status=404, mimetype='application/json')
+    body = {
+        'ok': True,
+        'id': result['id'],
+        'resolution': result['resolution'],
+        'resolved_at_ms': result['resolved_at_ms'],
+    }
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
+def _approve_view(approval_id: str):
+    return _resolution_view(approval_id, 'approved')
+
+
+def _reject_view(approval_id: str):
+    return _resolution_view(approval_id, 'rejected')
+
+
 class SeekerzeroMobileApi(ApiHandler):
     '''Bootstrap handler. Loader instantiates us once at startup; we register
     /mobile/* routes via side-effect in __init__.'''
@@ -171,6 +226,18 @@ class SeekerzeroMobileApi(ApiHandler):
                 _stream_view,
                 methods=['GET'],
             )
+            app.add_url_rule(
+                '/mobile/approvals/<approval_id>/approve',
+                'seekerzero_mobile_approvals_approve',
+                _approve_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/approvals/<approval_id>/reject',
+                'seekerzero_mobile_approvals_reject',
+                _reject_view,
+                methods=['POST'],
+            )
             SeekerzeroMobileApi._registered = True
 
     @classmethod
@@ -187,7 +254,7 @@ class SeekerzeroMobileApi(ApiHandler):
 
     @classmethod
     def get_methods(cls) -> list[str]:
-        return ['GET']
+        return ['GET', 'POST']
 
     async def process(self, input: Input, request: Request) -> Output:
         return {'ok': False, 'error': 'direct call not supported'}
