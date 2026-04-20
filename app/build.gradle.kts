@@ -87,5 +87,6 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.android.embedded)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
     debugImplementation(libs.androidx.ui.tooling)
 }

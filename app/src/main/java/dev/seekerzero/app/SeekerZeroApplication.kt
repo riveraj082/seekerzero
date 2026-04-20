@@ -5,6 +5,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.media.RingtoneManager
+import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.util.LogCollector
 
 class SeekerZeroApplication : Application() {
 
@@ -15,6 +17,8 @@ class SeekerZeroApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        LogCollector.init(this)
+        ConfigManager.init(this)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val serviceChannel = NotificationChannel(

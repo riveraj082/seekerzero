@@ -1,4 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SeekerZero</string>
+
+    <!-- Setup flow -->
+    <string name="setup_title">SeekerZero setup</string>
+    <string name="setup_welcome_header">Welcome</string>
+    <string name="setup_welcome_body">SeekerZero is a remote control for Agent Zero over your tailnet. Scan the QR shown on your Agent Zero server to link this device.</string>
+    <string name="setup_scan_cta">Scan QR</string>
+    <string name="setup_manual_cta">Can\'t scan? Enter host manually</string>
+
+    <string name="setup_manual_header">Manual entry</string>
+    <string name="setup_manual_body">Type the tailnet host of your Agent Zero server. Include the port if it is not 80.</string>
+    <string name="setup_manual_field_host">Tailnet host</string>
+    <string name="setup_manual_field_client">Client ID (optional)</string>
+    <string name="setup_manual_submit">Continue</string>
+    <string name="setup_manual_back">Back</string>
+
+    <string name="setup_verifying_body">Contacting Agent Zero\u2026</string>
+
+    <string name="setup_health_failed_header">Couldn\'t reach Agent Zero</string>
+    <string name="setup_health_failed_retry">Retry</string>
+    <string name="setup_health_failed_start_over">Start over</string>
+
+    <string name="setup_notification_header">Notifications</string>
+    <string name="setup_notification_body">SeekerZero uses notifications to alert you when Agent Zero has a new approval gate. You can skip this \u2014 the app will still work, just without alerts.</string>
+    <string name="setup_notification_allow">Allow</string>
+    <string name="setup_notification_skip">Skip</string>
+
+    <string name="setup_battery_header">Battery optimization</string>
+    <string name="setup_battery_body">To keep the connection to Agent Zero alive in the background, SeekerZero should be exempt from battery optimization. You can skip this now and change it later.</string>
+    <string name="setup_battery_open_settings">Open settings</string>
+    <string name="setup_battery_skip">Skip</string>
+
+    <string name="setup_done_primary">Linked.</string>
+    <string name="setup_done_secondary">Opening SeekerZero\u2026</string>
+
+    <!-- Main scaffold tab labels -->
+    <string name="tab_approvals">Approvals</string>
+    <string name="tab_tasks">Tasks</string>
+    <string name="tab_cost">Cost</string>
+    <string name="tab_diagnostics">Diagnostics</string>
+
+    <!-- Tab stub placeholders -->
+    <string name="stub_approvals_body">Pending approval gates will appear here.</string>
+    <string name="stub_tasks_body">Scheduled tasks from Agent Zero will appear here.</string>
+    <string name="stub_cost_body">Daily / 7-day / 30-day cost rollups will appear here.</string>
+    <string name="stub_diagnostics_body">Connection, fleet health, and build info will appear here.</string>
 </resources>
