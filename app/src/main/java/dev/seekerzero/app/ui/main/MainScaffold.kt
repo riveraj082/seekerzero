@@ -1,9 +1,12 @@
 package dev.seekerzero.app.ui.main
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.outlined.Done
@@ -16,11 +19,15 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.seekerzero.app.R
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -28,8 +35,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import dev.seekerzero.app.service.SeekerZeroService
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.components.StatusDot
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
+import dev.seekerzero.app.util.ConnectionState
+import dev.seekerzero.app.util.ServiceState
 
 private data class TabDef(
     val route: String,
@@ -49,6 +60,11 @@ fun MainScaffold() {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
+    val context = LocalContext.current
+
+    LaunchedEffect(Unit) {
+        SeekerZeroService.start(context)
+    }
 
     Scaffold(
         containerColor = SeekerZeroColors.Background,
@@ -98,10 +114,37 @@ fun MainScaffold() {
 }
 
 @Composable
-private fun ApprovalsScreenStub() = TabStub(
-    title = stringResource(R.string.tab_approvals),
-    body = stringResource(R.string.stub_approvals_body)
-)
+private fun ApprovalsScreenStub() {
+    val state by ServiceState.connectionState.collectAsStateWithLifecycle()
+    val pending by ServiceState.pendingApprovals.collectAsStateWithLifecycle()
+    SeekerZeroScaffold(title = stringResource(R.string.tab_approvals)) { pad ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(pad),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                StatusDot(
+                    color = when (state) {
+                        ConnectionState.CONNECTED -> SeekerZeroColors.Success
+                        ConnectionState.RECONNECTING -> SeekerZeroColors.Warning
+                        ConnectionState.PAUSED_NO_NETWORK -> SeekerZeroColors.Warning
+                        ConnectionState.OFFLINE -> SeekerZeroColors.Error
+                        ConnectionState.DISCONNECTED -> SeekerZeroColors.TextDisabled
+                    },
+                    size = 10.dp,
+                    pulsing = state == ConnectionState.RECONNECTING
+                )
+                Text(
+                    text = "${state.name.lowercase().replaceFirstChar { it.uppercase() }} • ${pending.size} pending",
+                    color = SeekerZeroColors.TextSecondary
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun TasksScreenStub() = TabStub(

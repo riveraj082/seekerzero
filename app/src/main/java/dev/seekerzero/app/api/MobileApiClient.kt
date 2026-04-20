@@ -1,5 +1,7 @@
 package dev.seekerzero.app.api
 
+import dev.seekerzero.app.api.models.ApprovalsPendingResponse
+import dev.seekerzero.app.api.models.ApprovalsStreamResponse
 import dev.seekerzero.app.api.models.HealthResponse
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.LogCollector
@@ -7,6 +9,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -17,6 +20,7 @@ import kotlin.coroutines.resumeWithException
 
 object MobileApiClient {
     private const val TAG = "MobileApiClient"
+    private const val STREAM_READ_TIMEOUT_S = 75L
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -26,15 +30,42 @@ object MobileApiClient {
             .build()
     }
 
+    private val streamClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(STREAM_READ_TIMEOUT_S, TimeUnit.SECONDS)
+            .build()
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun health(): Result<HealthResponse> = runCatching {
         val url = buildUrl("/health")
         LogCollector.d(TAG, "GET $url")
         val request = Request.Builder().url(url).get().build()
-        val body = execute(request)
+        val body = execute(client, request)
         json.decodeFromString(HealthResponse.serializer(), body)
     }.onFailure { LogCollector.w(TAG, "health() failed: ${it.message}") }
+
+    suspend fun approvalsPending(): Result<ApprovalsPendingResponse> = runCatching {
+        val url = buildUrl("/approvals/pending")
+        LogCollector.d(TAG, "GET $url")
+        val request = Request.Builder().url(url).get().build()
+        val body = execute(client, request)
+        json.decodeFromString(ApprovalsPendingResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "approvalsPending() failed: ${it.message}") }
+
+    suspend fun approvalsStream(sinceMs: Long?): Result<ApprovalsStreamResponse> = runCatching {
+        val base = buildUrl("/approvals/stream")
+        val url = if (sinceMs != null) {
+            base.toHttpUrl().newBuilder().addQueryParameter("since", sinceMs.toString()).build().toString()
+        } else {
+            base
+        }
+        LogCollector.d(TAG, "GET $url")
+        val request = Request.Builder().url(url).get().build()
+        val body = execute(streamClient, request)
+        json.decodeFromString(ApprovalsStreamResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "approvalsStream() failed: ${it.message}") }
 
     private fun buildUrl(pathSuffix: String): String {
         val rawHost = ConfigManager.a0Host
@@ -47,9 +78,9 @@ object MobileApiClient {
         return "http://$hostNoPort:$port$base$suffix"
     }
 
-    private suspend fun execute(request: Request): String =
+    private suspend fun execute(httpClient: OkHttpClient, request: Request): String =
         suspendCancellableCoroutine { cont ->
-            val call = client.newCall(request)
+            val call = httpClient.newCall(request)
             cont.invokeOnCancellation { runCatching { call.cancel() } }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
