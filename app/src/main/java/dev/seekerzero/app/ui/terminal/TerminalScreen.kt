@@ -56,15 +56,16 @@ import dev.seekerzero.app.ui.theme.SeekerZeroColors
 @Composable
 fun TerminalScreen(viewModel: TerminalViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val log by viewModel.log.collectAsStateWithLifecycle()
+    val scrollback by viewModel.scrollback.collectAsStateWithLifecycle()
     val publicKey by viewModel.publicKey.collectAsStateWithLifecycle()
 
     SeekerZeroScaffold(title = stringResource(R.string.tab_terminal)) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
             when (state) {
                 is TerminalState.Connected -> ConnectedView(
-                    log = log,
-                    onRun = { viewModel.run(it) },
+                    scrollback = scrollback,
+                    onSend = { viewModel.sendLine(it) },
+                    onClear = { viewModel.clearScrollback() },
                     onDisconnect = { viewModel.disconnect() }
                 )
                 is TerminalState.Connecting -> CenteredText("Connecting to a0prod\u2026")
@@ -212,8 +213,9 @@ private fun SetupView(
 
 @Composable
 private fun ConnectedView(
-    log: List<TerminalEntry>,
-    onRun: (String) -> Unit,
+    scrollback: String,
+    onSend: (String) -> Unit,
+    onClear: () -> Unit,
     onDisconnect: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -230,54 +232,35 @@ private fun ConnectedView(
                 fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.weight(1f))
+            TextButton(onClick = onClear) {
+                Text("Clear", color = SeekerZeroColors.TextSecondary, fontSize = 11.sp)
+            }
             TextButton(onClick = onDisconnect) {
                 Text("Disconnect", color = SeekerZeroColors.Error, fontSize = 11.sp)
             }
         }
-        val listState = rememberLazyListState()
-        LaunchedEffect(log.size, log.lastOrNull()?.output) {
-            if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+        val scrollState = rememberScrollState()
+        // Auto-scroll to the bottom whenever scrollback grows.
+        LaunchedEffect(scrollback.length) {
+            if (scrollState.value < scrollState.maxValue) {
+                scrollState.animateScrollTo(scrollState.maxValue)
+            }
         }
-        LazyColumn(
-            state = listState,
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp)
+                .verticalScroll(scrollState)
         ) {
-            items(log, key = { it.id }) { entry ->
-                LogEntryRow(entry)
-            }
-        }
-        CommandInput(onSubmit = onRun)
-    }
-}
-
-@Composable
-private fun LogEntryRow(entry: TerminalEntry) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "$ ${entry.command}",
-            color = SeekerZeroColors.Primary,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace
-        )
-        if (entry.inFlight) {
             Text(
-                text = "running\u2026",
-                color = SeekerZeroColors.TextSecondary,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace
-            )
-        } else if (entry.output.isNotEmpty()) {
-            Text(
-                text = entry.output,
-                color = SeekerZeroColors.TextPrimary,
+                text = if (scrollback.isEmpty()) "(shell ready — type a command)" else scrollback,
+                color = if (scrollback.isEmpty()) SeekerZeroColors.TextDisabled else SeekerZeroColors.TextPrimary,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             )
         }
+        CommandInput(onSubmit = onSend)
     }
 }
 

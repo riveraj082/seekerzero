@@ -6,15 +6,26 @@ import kotlinx.coroutines.withContext
 import com.hierynomus.sshj.key.BaseKeyAlgorithm
 import com.hierynomus.sshj.key.KeyAlgorithm
 import com.hierynomus.sshj.signature.Ed25519PublicKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable
 import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Factory
 import net.schmizz.sshj.common.KeyType
+import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.util.concurrent.TimeUnit
@@ -41,8 +52,27 @@ object SshClient {
     private const val CONNECT_TIMEOUT_MS = 10_000
 
     private var ssh: SSHClient? = null
+    private var shellSession: Session? = null
+    private var shellCommand: Session.Shell? = null
+    private var shellInput: OutputStream? = null
+    private var readerJob: Job? = null
+    private val pumpScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Bytes read from the persistent shell's pty stdout/stderr. Consumers
+     * (the Terminal UI) collect this, decode as UTF-8, strip ANSI escape
+     * sequences, and append to a scrollback buffer. Replay is not kept —
+     * consumers must accumulate state themselves.
+     */
+    private val _shellOutput = MutableSharedFlow<ByteArray>(
+        replay = 0,
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val shellOutput: SharedFlow<ByteArray> = _shellOutput.asSharedFlow()
 
     val isConnected: Boolean get() = ssh?.isConnected == true && ssh?.isAuthenticated == true
+    val hasShell: Boolean get() = shellCommand != null
 
     suspend fun connect(host: String, port: Int = 22, user: String): Result<Unit> =
         withContext(Dispatchers.IO) {
@@ -93,6 +123,74 @@ object SshClient {
             }
         }
 
+    /**
+     * Open a persistent pty shell session. One per SshClient. Output bytes
+     * stream into [shellOutput]; send input via [sendInput].
+     */
+    suspend fun openShell(
+        termType: String = "xterm-256color",
+        cols: Int = 80,
+        rows: Int = 24
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val client = ssh ?: throw IllegalStateException("not connected")
+            closeShellInternal()
+            val session = client.startSession()
+            session.allocatePTY(termType, cols, rows, 0, 0, emptyMap())
+            val shell = session.startShell()
+            shellSession = session
+            shellCommand = shell
+            shellInput = shell.outputStream
+            // Reader coroutine: pump bytes from the shell's input stream to
+            // the SharedFlow until the stream closes or the job is cancelled.
+            readerJob = pumpScope.launch {
+                val buf = ByteArray(4096)
+                val src = shell.inputStream
+                try {
+                    while (isActive) {
+                        val n = src.read(buf)
+                        if (n < 0) break
+                        if (n > 0) {
+                            val chunk = buf.copyOf(n)
+                            _shellOutput.emit(chunk)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    if (isActive) {
+                        LogCollector.w(TAG, "shell reader ended: ${t.message}")
+                    }
+                } finally {
+                    LogCollector.d(TAG, "shell reader exit")
+                }
+            }
+            LogCollector.d(TAG, "shell opened ($termType ${cols}x${rows})")
+        }.onFailure { LogCollector.w(TAG, "openShell failed: ${it.message}") }
+    }
+
+    /** Write bytes to the shell's pty stdin. Caller appends any line terminator. */
+    suspend fun sendInput(bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val out = shellInput ?: throw IllegalStateException("shell not open")
+            out.write(bytes)
+            out.flush()
+        }.onFailure { LogCollector.w(TAG, "sendInput failed: ${it.message}") }
+    }
+
+    fun closeShell() {
+        closeShellInternal()
+    }
+
+    private fun closeShellInternal() {
+        readerJob?.cancel()
+        readerJob = null
+        runCatching { shellInput?.close() }
+        shellInput = null
+        runCatching { shellCommand?.close() }
+        shellCommand = null
+        runCatching { shellSession?.close() }
+        shellSession = null
+    }
+
     suspend fun exec(command: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val client = ssh ?: throw IllegalStateException("not connected")
@@ -116,6 +214,7 @@ object SshClient {
     }
 
     private fun disconnectInternal() {
+        closeShellInternal()
         val existing = ssh ?: return
         runCatching { existing.disconnect() }
         ssh = null
