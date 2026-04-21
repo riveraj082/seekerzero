@@ -18,10 +18,11 @@ import dev.seekerzero.app.ui.theme.SeekerZeroTheme
 fun SeekerZeroScaffold(
     title: String,
     onBack: (() -> Unit)? = null,
+    onMenu: (() -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
-        topBar = { SeekerZeroTopAppBar(title = title, onBack = onBack) },
+        topBar = { SeekerZeroTopAppBar(title = title, onBack = onBack, onMenu = onMenu) },
         containerColor = SeekerZeroColors.Background
     ) { inner ->
         Box(

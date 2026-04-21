@@ -594,6 +594,16 @@ SeekerZero v3 intentionally widens the blast radius relative to v2 (terminal acc
 
 ---
 
+## Known cleanups (deferred from shipped phases)
+
+Surfaces that work but have rough edges worth revisiting:
+
+- **Drawer vs bottom nav** (Phase 5.1, 2026-04-21): the chat-list drawer lives inside `ChatScreen`, so its modal scrim doesn't cover the bottom `NavigationBar`. Tapping the **Chat** tab icon while the drawer is open does nothing. Fix: hoist `ModalNavigationDrawer` up to `MainScaffold` so its scrim covers the whole screen, or observe tab-reselection events in `MainScaffold` and signal the drawer to close. Non-trivial refactor; deferred until it bothers us in practice.
+- **Cost / Diagnostics tab stubs** still render as empty screens in `MainScaffold` even though they were cut from v3. Should be removed from `TABS` in `ui/main/MainScaffold.kt` and their `Stub` composables deleted. Trivially one commit.
+- **`_05_task_stats_display` footer on mobile finals** (Phase 5 Step 4a): A0's cost/timing table lands in every assistant message on the phone. Fine as data; visually heavy for a phone UI. If we want to strip it, a targeted pass in `_99_seekerzero_final.py`'s `_extract_final_text` can trim off everything after the first `---` horizontal rule (that's where the footer begins).
+
+---
+
 ## v2 directions (architecture-affecting, worth knowing now)
 
 ### Device-as-capability inversion

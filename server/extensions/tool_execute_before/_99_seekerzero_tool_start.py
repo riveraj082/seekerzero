@@ -5,7 +5,7 @@
 # mobile pub/sub so the phone can show a "Using <tool>..." indicator
 # while A0 is doing mid-turn work.
 #
-# Filters: only the mobile-seekerzero context, only the top-level agent
+# Filters: only the mobile-* contexts, only the top-level agent
 # (subordinates call tools too and we don't want to surface every
 # sub-agent action on the phone), and skip the "response" tool (that's
 # A0's final-reply signal, not a user-facing tool action — the response
@@ -17,7 +17,7 @@ import time
 from python.helpers.extension import Extension
 
 
-_MOBILE_CONTEXT_ID = 'mobile-seekerzero'
+_MOBILE_CONTEXT_PREFIX = 'mobile-'
 _CHAT_BUS_KEY = '_seekerzero_chat_bus'
 _SKIP_TOOLS = ('response',)
 
@@ -30,7 +30,8 @@ class SeekerzeroToolStart(Extension):
         tool_name: str = '',
         **kwargs,
     ):
-        if self.agent.context.id != _MOBILE_CONTEXT_ID:
+        ctx_id = self.agent.context.id
+        if not isinstance(ctx_id, str) or not ctx_id.startswith(_MOBILE_CONTEXT_PREFIX):
             return
         if getattr(self.agent, 'number', 0) != 0:
             return

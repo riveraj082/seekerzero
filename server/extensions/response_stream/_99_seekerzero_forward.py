@@ -13,7 +13,7 @@
 # boundary. AgentContext is a true singleton keyed by id, so context.data
 # IS shared.
 #
-# Only fires for the mobile-seekerzero context.
+# Only fires for the mobile-* contexts.
 #
 # Canonical source lives at /a0/usr/patches/seekerzero_forward_response.py
 # and is copied into /a0/usr/extensions/response_stream/ by
@@ -26,7 +26,7 @@ from agent import LoopData
 from python.helpers.extension import Extension
 
 
-_MOBILE_CONTEXT_ID = 'mobile-seekerzero'
+_MOBILE_CONTEXT_PREFIX = 'mobile-'
 _CHAT_BUS_KEY = '_seekerzero_chat_bus'
 
 
@@ -39,7 +39,8 @@ class SeekerzeroForwardResponse(Extension):
         parsed: dict | None = None,
         **kwargs,
     ):
-        if self.agent.context.id != _MOBILE_CONTEXT_ID:
+        ctx_id = self.agent.context.id
+        if not isinstance(ctx_id, str) or not ctx_id.startswith(_MOBILE_CONTEXT_PREFIX):
             return
         if not parsed:
             return

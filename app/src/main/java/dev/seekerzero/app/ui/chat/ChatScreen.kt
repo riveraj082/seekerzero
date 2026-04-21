@@ -1,6 +1,7 @@
 package dev.seekerzero.app.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,15 +20,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,9 +50,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.seekerzero.app.R
+import dev.seekerzero.app.api.models.ChatContext
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
@@ -53,6 +64,8 @@ fun ChatScreen(
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
     val activeTool by viewModel.activeTool.collectAsStateWithLifecycle()
     val turnTools by viewModel.currentTurnTools.collectAsStateWithLifecycle()
+    val contexts by viewModel.contexts.collectAsStateWithLifecycle()
+    val activeContextId by viewModel.activeContextId.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         viewModel.attach()
@@ -65,34 +78,162 @@ fun ChatScreen(
     val showTimeline = streaming && turnTools.isNotEmpty()
     val showPill = streaming && !showTimeline && (activeTool != null || lastAssistantEmpty)
 
-    SeekerZeroScaffold(title = stringResource(R.string.tab_chat)) { pad ->
-        Column(modifier = Modifier.fillMaxSize().padding(pad)) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                if (messages.isEmpty()) {
-                    EmptyState()
-                } else {
-                    MessageList(messages = messages)
-                }
-            }
-            if (showTimeline || showPill) {
-                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Text(
-                        text = "Agent Zero",
-                        color = SeekerZeroColors.TextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
-                    )
-                    if (showTimeline) {
-                        ToolTimeline(tools = turnTools)
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    val activeTitle = contexts.firstOrNull { it.id == activeContextId }?.displayName
+        ?: stringResource(R.string.tab_chat)
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ChatDrawerContent(
+                contexts = contexts,
+                activeContextId = activeContextId,
+                onSelect = {
+                    viewModel.switchContext(it)
+                    scope.launch { drawerState.close() }
+                },
+                onCreate = {
+                    viewModel.createAndSwitch()
+                    scope.launch { drawerState.close() }
+                },
+                onDelete = { viewModel.delete(it) },
+                onRefresh = { viewModel.refreshContexts() }
+            )
+        }
+    ) {
+        SeekerZeroScaffold(
+            title = activeTitle,
+            onMenu = { scope.launch { drawerState.open() } }
+        ) { pad ->
+            Column(modifier = Modifier.fillMaxSize().padding(pad)) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (messages.isEmpty()) {
+                        EmptyState()
                     } else {
-                        ActivityPill(toolName = activeTool)
+                        MessageList(messages = messages)
                     }
                 }
+                if (showTimeline || showPill) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Text(
+                            text = "Agent Zero",
+                            color = SeekerZeroColors.TextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
+                        )
+                        if (showTimeline) {
+                            ToolTimeline(tools = turnTools)
+                        } else {
+                            ActivityPill(toolName = activeTool)
+                        }
+                    }
+                }
+                Composer(
+                    enabled = !streaming,
+                    onSend = { viewModel.send(it) }
+                )
             }
-            Composer(
-                enabled = !streaming,
-                onSend = { viewModel.send(it) }
+        }
+    }
+}
+
+@Composable
+private fun ChatDrawerContent(
+    contexts: List<ChatContext>,
+    activeContextId: String,
+    onSelect: (String) -> Unit,
+    onCreate: () -> Unit,
+    onDelete: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+
+    ModalDrawerSheet(
+        drawerContainerColor = SeekerZeroColors.Surface
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(vertical = 12.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Chats",
+                    color = SeekerZeroColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onCreate) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = "New chat",
+                        tint = SeekerZeroColors.Primary
+                    )
+                }
+            }
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                items(contexts, key = { it.id }) { ctx ->
+                    ContextRow(
+                        context = ctx,
+                        isActive = ctx.id == activeContextId,
+                        onSelect = { onSelect(ctx.id) },
+                        onDelete = { onDelete(ctx.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContextRow(
+    context: ChatContext,
+    isActive: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val bg = if (isActive) SeekerZeroColors.SurfaceVariant else SeekerZeroColors.Surface
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bg)
+            .clickable(enabled = !isActive, onClick = onSelect)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = context.displayName.ifBlank { context.id },
+                color = SeekerZeroColors.TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+            )
+            if (context.id != context.displayName) {
+                Text(
+                    text = context.id,
+                    color = SeekerZeroColors.TextDisabled,
+                    fontSize = 10.sp
+                )
+            }
+        }
+        if (isActive) {
+            Text(
+                text = "Active",
+                color = SeekerZeroColors.TextDisabled,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = "Delete chat",
+                tint = SeekerZeroColors.Error
             )
         }
     }

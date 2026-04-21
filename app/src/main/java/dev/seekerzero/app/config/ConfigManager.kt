@@ -15,9 +15,11 @@ object ConfigManager {
     private const val K_DISPLAY_NAME = "display_name"
     private const val K_LAST_CONTACT = "last_contact_at_ms"
     private const val K_SERVICE_ENABLED = "service_enabled"
+    private const val K_ACTIVE_CHAT_CONTEXT = "active_chat_context"
 
     private const val DEFAULT_API_BASE = "/mobile"
     private const val DEFAULT_PORT = 50080
+    private const val DEFAULT_CHAT_CONTEXT = "mobile-seekerzero"
 
     private lateinit var prefs: SharedPreferences
 
@@ -42,6 +44,9 @@ object ConfigManager {
     private val _serviceEnabled = MutableStateFlow(false)
     val serviceEnabledFlow: StateFlow<Boolean> = _serviceEnabled
 
+    private val _activeChatContext = MutableStateFlow(DEFAULT_CHAT_CONTEXT)
+    val activeChatContextFlow: StateFlow<String> = _activeChatContext
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         _a0Host.value = prefs.getString(K_A0_HOST, null)
@@ -51,6 +56,8 @@ object ConfigManager {
         _displayName.value = prefs.getString(K_DISPLAY_NAME, null)
         _lastContactAtMs.value = prefs.getLong(K_LAST_CONTACT, 0L)
         _serviceEnabled.value = prefs.getBoolean(K_SERVICE_ENABLED, false)
+        _activeChatContext.value = prefs.getString(K_ACTIVE_CHAT_CONTEXT, DEFAULT_CHAT_CONTEXT)
+            ?: DEFAULT_CHAT_CONTEXT
     }
 
     var a0Host: String?
@@ -100,6 +107,14 @@ object ConfigManager {
         set(value) {
             prefs.edit().putBoolean(K_SERVICE_ENABLED, value).apply()
             _serviceEnabled.value = value
+        }
+
+    var activeChatContext: String
+        get() = _activeChatContext.value
+        set(value) {
+            val v = if (value.isBlank()) DEFAULT_CHAT_CONTEXT else value
+            prefs.edit().putString(K_ACTIVE_CHAT_CONTEXT, v).apply()
+            _activeChatContext.value = v
         }
 
     fun isConfigured(): Boolean = a0Host != null && clientId != null

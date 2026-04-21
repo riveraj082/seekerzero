@@ -45,3 +45,11 @@ data class ChatSendResponse(
     @SerialName("assistant_message_id") val assistantMessageId: String,
     @SerialName("created_at_ms") val createdAtMs: Long
 )
+
+@Serializable
+data class ChatContextCreateResponse(
+    val ok: Boolean,
+    val id: String,
+    @SerialName("display_name") val displayName: String,
+    @SerialName("created_at_ms") val createdAtMs: Long
+)

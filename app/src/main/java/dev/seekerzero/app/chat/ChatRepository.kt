@@ -2,6 +2,7 @@ package dev.seekerzero.app.chat
 
 import android.content.Context
 import dev.seekerzero.app.api.MobileApiClient
+import dev.seekerzero.app.api.models.ChatContext
 import dev.seekerzero.app.api.models.ChatMessageDto
 import dev.seekerzero.app.util.LogCollector
 import kotlinx.coroutines.flow.Flow
@@ -64,6 +65,9 @@ class ChatRepository private constructor(
 
     private val _currentTurnTools = MutableStateFlow<List<ToolActivity>>(emptyList())
     val currentTurnTools: StateFlow<List<ToolActivity>> = _currentTurnTools.asStateFlow()
+
+    private val _remoteContexts = MutableStateFlow<List<ChatContext>>(emptyList())
+    val remoteContexts: StateFlow<List<ChatContext>> = _remoteContexts.asStateFlow()
 
     fun messages(contextId: String = DEFAULT_CONTEXT): Flow<List<ChatMessageEntity>> =
         dao.observe(contextId)
@@ -214,6 +218,37 @@ class ChatRepository private constructor(
         _streaming.value = false
         _activeTool.value = null
         _currentTurnTools.value = emptyList()
+    }
+
+    suspend fun refreshContexts(): Result<List<ChatContext>> {
+        val result = MobileApiClient.chatContexts()
+        result.onSuccess { _remoteContexts.value = it.contexts }
+        return result.map { it.contexts }
+    }
+
+    suspend fun createContext(): Result<String> {
+        val result = MobileApiClient.chatContextCreate()
+        result.onSuccess {
+            // Optimistically prepend to the list so the drawer updates immediately.
+            val entry = ChatContext(
+                id = it.id,
+                displayName = it.displayName,
+                lastMessageAtMs = it.createdAtMs
+            )
+            _remoteContexts.value = listOf(entry) + _remoteContexts.value.filterNot { c -> c.id == it.id }
+        }
+        return result.map { it.id }
+    }
+
+    suspend fun deleteContext(contextId: String): Result<Unit> {
+        val result = MobileApiClient.chatContextDelete(contextId)
+        result.onSuccess {
+            _remoteContexts.value = _remoteContexts.value.filterNot { it.id == contextId }
+            // Wipe the Room cache for that context so a later switch-back
+            // doesn't show ghost rows.
+            runCatching { dao.trim(contextId, 0) }
+        }
+        return result
     }
 
     private fun ChatMessageDto.toEntity(contextId: String) = ChatMessageEntity(

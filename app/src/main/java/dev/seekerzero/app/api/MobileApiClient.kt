@@ -108,6 +108,23 @@ object MobileApiClient {
         json.decodeFromString(ChatContextsResponse.serializer(), body)
     }.onFailure { LogCollector.w(TAG, "chatContexts() failed: ${it.message}") }
 
+    suspend fun chatContextCreate(): Result<dev.seekerzero.app.api.models.ChatContextCreateResponse> = runCatching {
+        val url = buildUrl("/chat/contexts")
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post("{}".toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(dev.seekerzero.app.api.models.ChatContextCreateResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "chatContextCreate() failed: ${it.message}") }
+
+    suspend fun chatContextDelete(contextId: String): Result<Unit> = runCatching {
+        val url = buildUrl("/chat/contexts/$contextId")
+        LogCollector.d(TAG, "DELETE $url")
+        execute(client, Request.Builder().url(url).delete().build())
+        Unit
+    }.onFailure { LogCollector.w(TAG, "chatContextDelete($contextId) failed: ${it.message}") }
+
     suspend fun chatHistory(
         contextId: String,
         beforeMs: Long? = null,

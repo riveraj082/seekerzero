@@ -34,6 +34,7 @@ _stub_write_lock = threading.Lock()
 # ---- Chat (Phase 5 Step 4a: routed through A0 agent loop) ----------------
 _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 _CHAT_DEFAULT_CONTEXT = 'mobile-seekerzero'
+_CHAT_MOBILE_PREFIX = 'mobile-'
 _CHAT_DISPLAY_NAME = {'mobile-seekerzero': 'Seeker'}
 _CHAT_HISTORY_DEFAULT_LIMIT = 50
 _CHAT_HISTORY_MAX_LIMIT = 500
@@ -404,21 +405,121 @@ def _chat_dispatch_to_a0(context_id: str, user_text: str, assistant_id: str) -> 
 
 # ---- Chat views ---------------------------------------------------------
 
+def _context_to_dict(ctx) -> Dict[str, Any]:
+    from datetime import datetime
+    last = getattr(ctx, 'last_message', None)
+    last_ms = 0
+    if isinstance(last, datetime):
+        last_ms = int(last.timestamp() * 1000)
+    name = getattr(ctx, 'name', None)
+    display = name if name else _CHAT_DISPLAY_NAME.get(ctx.id, ctx.id)
+    return {
+        'id': ctx.id,
+        'display_name': display,
+        'last_message_at_ms': last_ms,
+    }
+
+
+def _list_mobile_contexts() -> List[Dict[str, Any]]:
+    """Return all A0 contexts with id prefix 'mobile-', sorted newest first
+    by last_message time."""
+    from agent import AgentContext
+    try:
+        everything = AgentContext.all()
+    except Exception:
+        return []
+    mobile = [c for c in everything if isinstance(c.id, str) and c.id.startswith(_CHAT_MOBILE_PREFIX)]
+    dicts = [_context_to_dict(c) for c in mobile]
+    dicts.sort(key=lambda d: d.get('last_message_at_ms', 0), reverse=True)
+    return dicts
+
+
 def _chat_contexts_view():
     ip = _client_ip()
     if not _is_tailnet(ip):
         return _forbidden('not a tailnet peer')
-    contexts: List[Dict[str, Any]] = []
-    # v1: only the default context exists; future phases may multiplex.
-    for cid in (_CHAT_DEFAULT_CONTEXT,):
-        log = _chat_read_log(cid)
-        last_ms = log[-1].get('created_at_ms', 0) if log else 0
+    contexts = _list_mobile_contexts()
+    # Ensure the default context is always surfaced, even if the user has
+    # never sent anything yet (so the first-launch drawer isn't empty).
+    if not any(c['id'] == _CHAT_DEFAULT_CONTEXT for c in contexts):
         contexts.append({
-            'id': cid,
-            'display_name': _CHAT_DISPLAY_NAME.get(cid, cid),
-            'last_message_at_ms': last_ms,
+            'id': _CHAT_DEFAULT_CONTEXT,
+            'display_name': _CHAT_DISPLAY_NAME.get(_CHAT_DEFAULT_CONTEXT, _CHAT_DEFAULT_CONTEXT),
+            'last_message_at_ms': 0,
         })
     body = {'contexts': contexts, 'server_time_ms': int(time.time() * 1000)}
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
+def _chat_contexts_create_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from agent import AgentContext
+    from initialize import initialize_agent
+    from python.helpers import persist_chat
+
+    try:
+        payload = flask_request.get_json(force=True, silent=True) or {}
+    except Exception:
+        payload = {}
+    requested_id = (payload.get('id') or '').strip()
+
+    if requested_id:
+        if not requested_id.startswith(_CHAT_MOBILE_PREFIX):
+            return _bad_request('id must start with "mobile-"')
+        if AgentContext.get(requested_id) is not None:
+            return _bad_request('id already exists')
+        new_id = requested_id
+    else:
+        new_id = f'{_CHAT_MOBILE_PREFIX}{uuid.uuid4().hex[:8]}'
+        # Collision guard even though 8 hex chars gives 4B ids.
+        while AgentContext.get(new_id) is not None:
+            new_id = f'{_CHAT_MOBILE_PREFIX}{uuid.uuid4().hex[:8]}'
+
+    ctx = AgentContext(config=initialize_agent(), id=new_id)
+    try:
+        persist_chat.save_tmp_chat(ctx)
+    except Exception:
+        pass  # best-effort; first real turn will persist anyway
+
+    body = {
+        'ok': True,
+        'id': ctx.id,
+        'display_name': getattr(ctx, 'name', None) or ctx.id,
+        'created_at_ms': int(time.time() * 1000),
+    }
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
+def _chat_contexts_delete_view(context_id: str):
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    if not context_id or not context_id.startswith(_CHAT_MOBILE_PREFIX):
+        return _bad_request('only mobile-* contexts can be deleted via /mobile')
+    from agent import AgentContext
+    from python.helpers import persist_chat
+
+    ctx = AgentContext.get(context_id)
+    if ctx is not None:
+        try:
+            ctx.reset()
+        except Exception:
+            pass
+    AgentContext.remove(context_id)
+    try:
+        persist_chat.remove_chat(context_id)
+    except Exception:
+        pass
+    # Clean up our mobile JSONL mirror.
+    try:
+        mirror = _CHAT_DIR / f'{context_id}.jsonl'
+        if mirror.exists():
+            mirror.unlink()
+    except OSError:
+        pass
+    body = {'ok': True, 'id': context_id}
     return Response(json.dumps(body), status=200, mimetype='application/json')
 
 
@@ -630,6 +731,18 @@ class SeekerzeroMobileApi(ApiHandler):
                 'seekerzero_mobile_chat_contexts',
                 _chat_contexts_view,
                 methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/chat/contexts',
+                'seekerzero_mobile_chat_contexts_create',
+                _chat_contexts_create_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/chat/contexts/<context_id>',
+                'seekerzero_mobile_chat_contexts_delete',
+                _chat_contexts_delete_view,
+                methods=['DELETE'],
             )
             app.add_url_rule(
                 '/mobile/chat/history',

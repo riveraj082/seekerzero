@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -20,16 +21,24 @@ import dev.seekerzero.app.ui.theme.SeekerZeroTheme
 @Composable
 fun SeekerZeroTopAppBar(
     title: String,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    onMenu: (() -> Unit)? = null
 ) {
     TopAppBar(
         title = { Text(title, color = SeekerZeroColors.TextPrimary) },
         navigationIcon = {
-            if (onBack != null) {
-                IconButton(onClick = onBack) {
+            when {
+                onBack != null -> IconButton(onClick = onBack) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
+                        tint = SeekerZeroColors.TextPrimary
+                    )
+                }
+                onMenu != null -> IconButton(onClick = onMenu) {
+                    Icon(
+                        imageVector = Icons.Outlined.Menu,
+                        contentDescription = "Open chats",
                         tint = SeekerZeroColors.TextPrimary
                     )
                 }

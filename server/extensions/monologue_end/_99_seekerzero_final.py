@@ -10,7 +10,7 @@
 # Shared state with the Flask handler lives on context.data[CHAT_BUS_KEY] —
 # see the forwarder extension's header for the why.
 #
-# Only fires for the mobile-seekerzero context and only for the top-level
+# Only fires for the mobile-* contexts and only for the top-level
 # agent (subordinate turns also call monologue_end, and we don't want to
 # terminate the user-visible reply on a subordinate's completion).
 #
@@ -26,7 +26,7 @@ from agent import LoopData
 from python.helpers.extension import Extension
 
 
-_MOBILE_CONTEXT_ID = 'mobile-seekerzero'
+_MOBILE_CONTEXT_PREFIX = 'mobile-'
 _CHAT_BUS_KEY = '_seekerzero_chat_bus'
 _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 
@@ -76,7 +76,8 @@ def _append_mirror(context_id: str, record: dict) -> None:
 class SeekerzeroFinal(Extension):
 
     async def execute(self, loop_data: LoopData = LoopData(), **kwargs):
-        if self.agent.context.id != _MOBILE_CONTEXT_ID:
+        ctx_id = self.agent.context.id
+        if not isinstance(ctx_id, str) or not ctx_id.startswith(_MOBILE_CONTEXT_PREFIX):
             return
         # Only top-level agent finals reach the user.
         if getattr(self.agent, 'number', 0) != 0:
@@ -103,7 +104,7 @@ class SeekerzeroFinal(Extension):
         final_text = _extract_final_text(self.agent)
         now_ms = int(time.time() * 1000)
 
-        _append_mirror(_MOBILE_CONTEXT_ID, {
+        _append_mirror(ctx_id, {
             'id': assistant_id,
             'role': 'assistant',
             'content': final_text,

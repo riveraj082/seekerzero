@@ -20,6 +20,7 @@ import dev.seekerzero.app.api.MobileApiClient
 import dev.seekerzero.app.api.models.Approval
 import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
+
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.util.LogCollector
 import dev.seekerzero.app.util.ServiceState
@@ -214,28 +215,35 @@ class SeekerZeroService : Service() {
         if (chatControllerJob?.isActive == true) return
         val repo = ChatRepository.get(applicationContext)
         chatControllerJob = scope.launch {
-            combine(ServiceState.chatAttached, repo.streaming) { attached, streaming ->
-                attached || streaming
+            // Three inputs: whether the screen is attached, whether a reply
+            // is in flight, and which context is active. When any of these
+            // changes, collectLatest cancels the previous inner block and
+            // restarts — context-switch = close old stream, open new one.
+            combine(
+                ServiceState.chatAttached,
+                repo.streaming,
+                ConfigManager.activeChatContextFlow
+            ) { attached, streaming, ctxId ->
+                Triple(attached || streaming, ctxId, attached)
             }
                 .distinctUntilChanged()
-                .collectLatest { shouldStream ->
+                .collectLatest { (shouldStream, contextId, _) ->
                     if (!shouldStream) {
-                        LogCollector.d(TAG, "chat stream: idle (attached=false, streaming=false)")
+                        LogCollector.d(TAG, "chat stream: idle")
                         return@collectLatest
                     }
-                    LogCollector.d(TAG, "chat stream: opening")
+                    LogCollector.d(TAG, "chat stream: opening for $contextId")
                     try {
                         while (scope.isActive) {
                             try {
-                                repo.refreshHistory()
-                                val sinceMs = repo.maxFinalMs()
+                                repo.refreshHistory(contextId)
+                                val sinceMs = repo.maxFinalMs(contextId)
                                 MobileApiClient.chatStream(
-                                    contextId = ChatRepository.DEFAULT_CONTEXT,
+                                    contextId = contextId,
                                     sinceMs = sinceMs
                                 ) { event ->
-                                    repo.applyEvent(ChatRepository.DEFAULT_CONTEXT, event)
+                                    repo.applyEvent(contextId, event)
                                 }
-                                // Stream returned cleanly (unlikely with readTimeout=0); loop to reconnect.
                                 LogCollector.d(TAG, "chat stream ended cleanly; reconnecting")
                             } catch (t: Throwable) {
                                 if (!scope.isActive) throw t
@@ -244,9 +252,9 @@ class SeekerZeroService : Service() {
                             }
                         }
                     } finally {
-                        LogCollector.d(TAG, "chat stream: closing")
-                        // If a reply was in flight when we got cancelled mid-drain, clear the
-                        // streaming flag so the UI doesn't stay pinned to "replying".
+                        LogCollector.d(TAG, "chat stream: closing ($contextId)")
+                        // Whenever we close (context switch, detach, service stop), clear
+                        // streaming state so a stale pill doesn't persist on the new context.
                         repo.markStreamingIdle()
                     }
                 }
