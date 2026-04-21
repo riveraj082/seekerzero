@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.HealthAndSafety
 import androidx.compose.material.icons.outlined.Paid
@@ -37,6 +38,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.seekerzero.app.service.SeekerZeroService
 import dev.seekerzero.app.ui.approvals.ApprovalsScreen
+import dev.seekerzero.app.ui.chat.ChatScreen
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 
@@ -47,6 +49,7 @@ private data class TabDef(
 )
 
 private val TABS = listOf(
+    TabDef("chat", R.string.tab_chat, Icons.AutoMirrored.Outlined.Chat),
     TabDef("approvals", R.string.tab_approvals, Icons.Outlined.Done),
     TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment),
     TabDef("cost", R.string.tab_cost, Icons.Outlined.Paid),
@@ -101,7 +104,8 @@ fun MainScaffold() {
                 .background(SeekerZeroColors.Background)
                 .padding(pad)
         ) {
-            NavHost(navController = navController, startDestination = "approvals") {
+            NavHost(navController = navController, startDestination = "chat") {
+                composable("chat") { ChatScreen() }
                 composable("approvals") { ApprovalsScreen() }
                 composable("tasks") { TasksScreenStub() }
                 composable("cost") { CostScreenStub() }

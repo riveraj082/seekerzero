@@ -36,6 +36,7 @@
     <string name="setup_done_secondary">Opening SeekerZero\u2026</string>
 
     <!-- Main scaffold tab labels -->
+    <string name="tab_chat">Chat</string>
     <string name="tab_approvals">Approvals</string>
     <string name="tab_tasks">Tasks</string>
     <string name="tab_cost">Cost</string>
@@ -46,4 +47,10 @@
     <string name="stub_tasks_body">Scheduled tasks from Agent Zero will appear here.</string>
     <string name="stub_cost_body">Daily / 7-day / 30-day cost rollups will appear here.</string>
     <string name="stub_diagnostics_body">Connection, fleet health, and build info will appear here.</string>
+
+    <!-- Chat -->
+    <string name="chat_empty_title">Start a conversation</string>
+    <string name="chat_empty_body">Send a prompt to Agent Zero. Responses will stream back token by token.</string>
+    <string name="chat_composer_hint">Message Agent Zero</string>
+    <string name="chat_send">Send</string>
 </resources>
