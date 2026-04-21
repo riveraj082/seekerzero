@@ -5,7 +5,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import android.media.RingtoneManager
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.LogCollector
 import org.bouncycastle.jce.provider.BouncyCastleProvider
@@ -15,7 +14,6 @@ class SeekerZeroApplication : Application() {
 
     companion object {
         const val CHANNEL_SERVICE = "seekerzero_service"
-        const val CHANNEL_APPROVALS = "seekerzero_approvals"
     }
 
     override fun onCreate() {
@@ -24,6 +22,10 @@ class SeekerZeroApplication : Application() {
         ConfigManager.init(this)
         installBouncyCastle()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Delete the Phase-1 approvals channel left over from earlier installs.
+        // No-op on fresh installs.
+        try { nm.deleteNotificationChannel("seekerzero_approvals") } catch (_: Throwable) {}
 
         val serviceChannel = NotificationChannel(
             CHANNEL_SERVICE,
@@ -37,22 +39,7 @@ class SeekerZeroApplication : Application() {
             lockscreenVisibility = Notification.VISIBILITY_SECRET
         }
 
-        val approvalsChannel = NotificationChannel(
-            CHANNEL_APPROVALS,
-            "Approvals",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "New approval gates raised by Agent Zero."
-            setShowBadge(true)
-            setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                null
-            )
-            enableVibration(true)
-        }
-
         nm.createNotificationChannel(serviceChannel)
-        nm.createNotificationChannel(approvalsChannel)
     }
 
     /**

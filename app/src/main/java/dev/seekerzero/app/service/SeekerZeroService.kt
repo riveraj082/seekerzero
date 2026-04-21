@@ -13,14 +13,11 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import dev.seekerzero.app.MainActivity
 import dev.seekerzero.app.SeekerZeroApplication
 import dev.seekerzero.app.api.MobileApiClient
-import dev.seekerzero.app.api.models.Approval
 import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
-
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.util.LogCollector
 import dev.seekerzero.app.util.ServiceState
@@ -39,18 +36,16 @@ import kotlinx.coroutines.launch
 class SeekerZeroService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var pollJob: Job? = null
+    private var healthJob: Job? = null
     private var chatControllerJob: Job? = null
-    private var lastSinceMs: Long? = null
-    private val seenApprovalIds = mutableSetOf<String>()
     private val watchdog = ConnectionWatchdog()
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     companion object {
         private const val TAG = "SeekerZeroService"
         private const val SERVICE_NOTIFICATION_ID = 1
-        private const val APPROVAL_NOTIFICATION_ID_BASE = 1000
         private const val CHAT_RECONNECT_DELAY_MS = 2000L
+        private const val HEALTH_PING_INTERVAL_MS = 20_000L
 
         fun start(context: Context) {
             val intent = Intent(context, SeekerZeroService::class.java)
@@ -112,14 +107,14 @@ class SeekerZeroService : Service() {
         LogCollector.d(TAG, "onStartCommand")
         startForegroundWithNotification()
         ConfigManager.serviceEnabled = true
-        startPolling()
+        startHealthPing()
         startChatController()
         return START_STICKY
     }
 
     override fun onDestroy() {
         LogCollector.d(TAG, "onDestroy")
-        pollJob?.cancel()
+        healthJob?.cancel()
         chatControllerJob?.cancel()
         scope.cancel()
         unregisterNetworkCallback()
@@ -164,49 +159,30 @@ class SeekerZeroService : Service() {
             .build()
     }
 
-    private fun startPolling() {
-        if (pollJob?.isActive == true) return
-        pollJob = scope.launch {
-            primePendingApprovals()
-            pollLoop()
-        }
-    }
-
-    private suspend fun primePendingApprovals() {
-        MobileApiClient.approvalsPending().onSuccess { resp ->
-            ServiceState.replacePendingApprovals(resp.approvals)
-            resp.approvals.forEach { seenApprovalIds.add(it.id) }
-            lastSinceMs = resp.serverTimeMs
-            ServiceState.markContact(resp.serverTimeMs)
-            ServiceState.setConnectionState(ConnectionState.CONNECTED)
-            watchdog.resetBackoff()
-            LogCollector.d(TAG, "primed with ${resp.approvals.size} pending approvals")
-        }.onFailure {
-            ServiceState.setConnectionState(ConnectionState.RECONNECTING)
-            LogCollector.w(TAG, "prime failed: ${it.message}")
-        }
-    }
-
-    private suspend fun pollLoop() {
-        while (scope.isActive) {
-            MobileApiClient.approvalsStream(lastSinceMs).onSuccess { resp ->
-                ServiceState.markContact(resp.serverTimeMs)
-                ServiceState.setConnectionState(ConnectionState.CONNECTED)
-                watchdog.resetBackoff()
-                lastSinceMs = resp.nextSinceMs
-                if (resp.approvals.isNotEmpty()) {
-                    ServiceState.mergePendingApprovals(resp.approvals)
-                    val trulyNew = resp.approvals.filter { seenApprovalIds.add(it.id) }
-                    trulyNew.forEach { notifyApproval(it) }
-                    LogCollector.d(TAG, "stream: +${resp.approvals.size} approvals (new=${trulyNew.size})")
-                }
-            }.onFailure { err ->
-                if (ServiceState.connectionState.value != ConnectionState.PAUSED_NO_NETWORK) {
-                    ServiceState.setConnectionState(ConnectionState.RECONNECTING)
-                }
-                ServiceState.incrementReconnectCount()
-                LogCollector.w(TAG, "stream error: ${err.message}")
-                watchdog.waitBeforeRetry()
+    /**
+     * Liveness ping against `/mobile/health` every 20 seconds. Replaces the
+     * approvals long-poll that used to drive the connection indicator; pure
+     * health signal now, no stub machinery. Cheap on battery and server.
+     */
+    private fun startHealthPing() {
+        if (healthJob?.isActive == true) return
+        healthJob = scope.launch {
+            while (scope.isActive) {
+                MobileApiClient.health()
+                    .onSuccess { resp ->
+                        ServiceState.markContact(resp.serverTimeMs)
+                        ServiceState.setConnectionState(ConnectionState.CONNECTED)
+                        watchdog.resetBackoff()
+                        LogCollector.d(TAG, "health ping ok (a0=${resp.a0Version})")
+                    }
+                    .onFailure { err ->
+                        if (ServiceState.connectionState.value != ConnectionState.PAUSED_NO_NETWORK) {
+                            ServiceState.setConnectionState(ConnectionState.RECONNECTING)
+                        }
+                        ServiceState.incrementReconnectCount()
+                        LogCollector.w(TAG, "health ping failed: ${err.message}")
+                    }
+                delay(HEALTH_PING_INTERVAL_MS)
             }
         }
     }
@@ -253,43 +229,9 @@ class SeekerZeroService : Service() {
                         }
                     } finally {
                         LogCollector.d(TAG, "chat stream: closing ($contextId)")
-                        // Whenever we close (context switch, detach, service stop), clear
-                        // streaming state so a stale pill doesn't persist on the new context.
                         repo.markStreamingIdle()
                     }
                 }
-        }
-    }
-
-    private fun notifyApproval(approval: Approval) {
-        val nm = NotificationManagerCompat.from(this)
-        if (!nm.areNotificationsEnabled()) {
-            LogCollector.w(TAG, "notifications disabled; skipping approval notif ${approval.id}")
-            return
-        }
-        val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pending = PendingIntent.getActivity(
-            this,
-            approval.id.hashCode(),
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val n = NotificationCompat.Builder(this, SeekerZeroApplication.CHANNEL_APPROVALS)
-            .setContentTitle("Approval needed")
-            .setContentText(approval.summary)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(approval.detail))
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pending)
-            .build()
-        try {
-            nm.notify(APPROVAL_NOTIFICATION_ID_BASE + approval.id.hashCode(), n)
-        } catch (t: SecurityException) {
-            LogCollector.w(TAG, "notify() denied: ${t.message}")
         }
     }
 }

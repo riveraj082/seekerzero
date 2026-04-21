@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.automirrored.outlined.Chat
-import androidx.compose.material.icons.outlined.Done
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -49,10 +49,9 @@ import dev.seekerzero.app.R
 import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.service.SeekerZeroService
-import dev.seekerzero.app.ui.approvals.ApprovalsScreen
 import dev.seekerzero.app.ui.chat.ChatDrawerContent
 import dev.seekerzero.app.ui.chat.ChatScreen
-import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.status.StatusScreen
 import dev.seekerzero.app.ui.tasks.TaskComposerScreen
 import dev.seekerzero.app.ui.tasks.TasksScreen
 import dev.seekerzero.app.ui.terminal.TerminalScreen
@@ -69,9 +68,9 @@ private const val ROUTE_CHAT = "chat"
 
 private val TABS = listOf(
     TabDef(ROUTE_CHAT, R.string.tab_chat, Icons.AutoMirrored.Outlined.Chat),
-    TabDef("approvals", R.string.tab_approvals, Icons.Outlined.Done),
     TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment),
-    TabDef("terminal", R.string.tab_terminal, Icons.Outlined.Terminal)
+    TabDef("terminal", R.string.tab_terminal, Icons.Outlined.Terminal),
+    TabDef("status", R.string.tab_status, Icons.Outlined.MonitorHeart)
 )
 
 @Composable
@@ -167,7 +166,6 @@ fun MainScaffold() {
                     composable(ROUTE_CHAT) {
                         ChatScreen(onMenu = { drawerOpen = true })
                     }
-                    composable("approvals") { ApprovalsScreen() }
                     composable("tasks") {
                         TasksScreen(onCompose = { navController.navigate("tasks/new") })
                     }
@@ -175,6 +173,7 @@ fun MainScaffold() {
                         TaskComposerScreen(onBack = { navController.popBackStack() })
                     }
                     composable("terminal") { TerminalScreen() }
+                    composable("status") { StatusScreen() }
                 }
             }
         }

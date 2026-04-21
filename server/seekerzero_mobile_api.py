@@ -26,13 +26,6 @@ from python.helpers.api import ApiHandler, Input, Output, ThreadLockType
 _TAILNET_PREFIX = '100.'
 _A0_VERSION = '0.9.8.2'
 
-_STUB_FILE = Path('/a0/usr/seekerzero/stub_approvals.json')
-_LONG_POLL_MAX_S = 60.0
-_POLL_INTERVAL_S = 0.5
-_SINCE_LOOKBACK_CAP_MS = 24 * 60 * 60 * 1000
-
-_stub_write_lock = threading.Lock()
-
 # ---- Chat (Phase 5 Step 4a: routed through A0 agent loop) ----------------
 _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 _CHAT_DEFAULT_CONTEXT = 'mobile-seekerzero'
@@ -76,46 +69,37 @@ def _bad_request(reason: str) -> Response:
     return Response(response=body, status=400, mimetype='application/json')
 
 
-def _load_stub_approvals() -> List[Dict[str, Any]]:
-    if not _STUB_FILE.exists():
+def _collect_errored_tasks() -> List[Dict[str, Any]]:
+    """Return up-to-5 tasks that are currently in the ERROR state or have a
+    non-zero retry_count. Used by the Status tab as a poor-man's "recent
+    A0 errors" view until we have a proper log-tail endpoint."""
+    try:
+        from python.helpers.task_scheduler import TaskScheduler, TaskState
+    except Exception:
         return []
     try:
-        with _STUB_FILE.open('r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
+        tasks = TaskScheduler.get().get_tasks()
+    except Exception:
         return []
-
-
-def _write_stub_approvals(approvals: List[Dict[str, Any]]) -> None:
-    tmp = _STUB_FILE.with_suffix(_STUB_FILE.suffix + '.tmp')
-    with _stub_write_lock:
-        tmp.write_text(json.dumps(approvals, indent=2), encoding='utf-8')
-        tmp.replace(_STUB_FILE)
-
-
-def _resolve_stub_approval(approval_id: str, resolution: str) -> Optional[Dict[str, Any]]:
-    with _stub_write_lock:
-        approvals = _load_stub_approvals()
-        match = next((a for a in approvals if a.get('id') == approval_id), None)
-        if match is None:
-            return None
-        remaining = [a for a in approvals if a.get('id') != approval_id]
-        tmp = _STUB_FILE.with_suffix(_STUB_FILE.suffix + '.tmp')
-        tmp.write_text(json.dumps(remaining, indent=2), encoding='utf-8')
-        tmp.replace(_STUB_FILE)
-        return {
-            'id': approval_id,
-            'resolution': resolution,
-            'resolved_at_ms': int(time.time() * 1000),
-            'approval': match,
-        }
-
-
-def _filter_since(approvals: List[Dict[str, Any]], since_ms: int) -> List[Dict[str, Any]]:
-    now_ms = int(time.time() * 1000)
-    effective_since = max(since_ms, now_ms - _SINCE_LOOKBACK_CAP_MS)
-    return [a for a in approvals if a.get('created_at_ms', 0) > effective_since]
+    out: List[Dict[str, Any]] = []
+    for t in tasks:
+        state = t.state.value if hasattr(t.state, 'value') else str(t.state)
+        retry_count = int(getattr(t, 'retry_count', 0) or 0)
+        if state == 'error' or retry_count > 0:
+            last_error_at = getattr(t, 'last_error_at', None)
+            err_ms = 0
+            if isinstance(last_error_at, datetime):
+                err_ms = int(last_error_at.timestamp() * 1000)
+            out.append({
+                'uuid': t.uuid,
+                'name': t.name,
+                'state': state,
+                'retry_count': retry_count,
+                'last_error_at_ms': err_ms,
+                'last_error_preview': (getattr(t, 'last_result', '') or '')[:300],
+            })
+    out.sort(key=lambda d: d.get('last_error_at_ms', 0), reverse=True)
+    return out[:5]
 
 
 def _health_view():
@@ -132,95 +116,13 @@ def _health_view():
             {'name': 'a0-work',  'status': 'up', 'last_response_ms': 180},
             {'name': 'a0-embed', 'status': 'up', 'last_response_ms': 95},
         ],
+        'errored_tasks': _collect_errored_tasks(),
     }
     return Response(
         response=json.dumps(body),
         status=200,
         mimetype='application/json',
     )
-
-
-def _pending_view():
-    ip = _client_ip()
-    if not _is_tailnet(ip):
-        return _forbidden('not a tailnet peer')
-
-    approvals = _load_stub_approvals()
-    body = {
-        'approvals': approvals,
-        'server_time_ms': int(time.time() * 1000),
-    }
-    return Response(json.dumps(body), status=200, mimetype='application/json')
-
-
-def _stream_view():
-    ip = _client_ip()
-    if not _is_tailnet(ip):
-        return _forbidden('not a tailnet peer')
-
-    since_raw = flask_request.args.get('since')
-    since_ms: Optional[int] = None
-    if since_raw is not None and since_raw != '':
-        try:
-            since_ms = int(since_raw)
-        except ValueError:
-            return _bad_request('since must be integer milliseconds')
-
-    # No since → start from "now"; long-poll waits for genuinely new approvals.
-    if since_ms is None:
-        since_ms = int(time.time() * 1000)
-
-    deadline = time.monotonic() + _LONG_POLL_MAX_S
-
-    while True:
-        approvals = _load_stub_approvals()
-        new_items = _filter_since(approvals, since_ms)
-        now_ms = int(time.time() * 1000)
-
-        if new_items:
-            body = {
-                'approvals': new_items,
-                'server_time_ms': now_ms,
-                'next_since_ms': now_ms,
-            }
-            return Response(json.dumps(body), status=200, mimetype='application/json')
-
-        if time.monotonic() >= deadline:
-            body = {
-                'approvals': [],
-                'server_time_ms': now_ms,
-                'next_since_ms': now_ms,
-            }
-            return Response(json.dumps(body), status=200, mimetype='application/json')
-
-        time.sleep(_POLL_INTERVAL_S)
-
-
-def _resolution_view(approval_id: str, resolution: str) -> Response:
-    ip = _client_ip()
-    if not _is_tailnet(ip):
-        return _forbidden('not a tailnet peer')
-    if resolution not in ('approved', 'rejected'):
-        return _bad_request('unknown resolution')
-    result = _resolve_stub_approval(approval_id, resolution)
-    if result is None:
-        body = json.dumps({'ok': False, 'error': 'approval not found', 'id': approval_id})
-        return Response(body, status=404, mimetype='application/json')
-    body = {
-        'ok': True,
-        'id': result['id'],
-        'resolution': result['resolution'],
-        'resolved_at_ms': result['resolved_at_ms'],
-    }
-    return Response(json.dumps(body), status=200, mimetype='application/json')
-
-
-def _approve_view(approval_id: str):
-    return _resolution_view(approval_id, 'approved')
-
-
-def _reject_view(approval_id: str):
-    return _resolution_view(approval_id, 'rejected')
 
 
 # ---- Chat helpers -------------------------------------------------------
@@ -947,30 +849,6 @@ class SeekerzeroMobileApi(ApiHandler):
                 'seekerzero_mobile_health',
                 _health_view,
                 methods=['GET'],
-            )
-            app.add_url_rule(
-                '/mobile/approvals/pending',
-                'seekerzero_mobile_approvals_pending',
-                _pending_view,
-                methods=['GET'],
-            )
-            app.add_url_rule(
-                '/mobile/approvals/stream',
-                'seekerzero_mobile_approvals_stream',
-                _stream_view,
-                methods=['GET'],
-            )
-            app.add_url_rule(
-                '/mobile/approvals/<approval_id>/approve',
-                'seekerzero_mobile_approvals_approve',
-                _approve_view,
-                methods=['POST'],
-            )
-            app.add_url_rule(
-                '/mobile/approvals/<approval_id>/reject',
-                'seekerzero_mobile_approvals_reject',
-                _reject_view,
-                methods=['POST'],
             )
             app.add_url_rule(
                 '/mobile/chat/contexts',

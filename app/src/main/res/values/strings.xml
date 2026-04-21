@@ -37,13 +37,9 @@
 
     <!-- Main scaffold tab labels -->
     <string name="tab_chat">Chat</string>
-    <string name="tab_approvals">Approvals</string>
     <string name="tab_tasks">Tasks</string>
     <string name="tab_terminal">Terminal</string>
-
-    <!-- Tab stub placeholders -->
-    <string name="stub_approvals_body">Pending approval gates will appear here.</string>
-    <string name="stub_tasks_body">Scheduled tasks from Agent Zero will appear here.</string>
+    <string name="tab_status">Status</string>
 
     <!-- Terminal — SSH setup -->
     <string name="terminal_setup_header">SSH key setup</string>
