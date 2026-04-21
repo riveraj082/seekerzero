@@ -43,8 +43,9 @@ _CHAT_HISTORY_MAX_LIMIT = 500
 _CHAT_TURN_LOOKBACK = 20  # how many prior messages to feed the model
 _CHAT_OLLAMA_URL = 'http://YOUR_LAN_IP:11434/api/chat'
 _CHAT_OLLAMA_MODEL = 'a0-work'
-_CHAT_STREAM_KEEPALIVE_S = 25.0
+_CHAT_STREAM_KEEPALIVE_S = 5.0
 _CHAT_STREAM_POLL_S = 0.25
+_CHAT_STREAM_MAX_SUBS_PER_CONTEXT = 1
 
 _chat_log_lock = threading.Lock()
 _chat_busy_lock = threading.Lock()
@@ -257,9 +258,22 @@ def _chat_append_log(context_id: str, record: Dict[str, Any]) -> None:
 
 
 def _chat_subscribe(context_id: str) -> 'queue.Queue[dict]':
+    """Subscribe to a context's event stream.
+
+    Enforces a small max-subs-per-context so stale connections from
+    aggressive client reconnects are evicted rather than piling up and
+    starving the Flask request-thread pool. Evicted queues get a poison
+    pill so their generator can exit cleanly on next read."""
     q: queue.Queue[dict] = queue.Queue(maxsize=1024)
     with _chat_subs_lock:
-        _chat_subscribers.setdefault(context_id, []).append(q)
+        bucket = _chat_subscribers.setdefault(context_id, [])
+        while len(bucket) >= _CHAT_STREAM_MAX_SUBS_PER_CONTEXT:
+            evicted = bucket.pop(0)
+            try:
+                evicted.put_nowait({'type': '__shutdown__'})
+            except queue.Full:
+                pass
+        bucket.append(q)
     return q
 
 
@@ -520,11 +534,17 @@ def _chat_stream_view():
                         'created_at_ms': m.get('created_at_ms'),
                     })
 
-            # 2) Drain live events from the queue until the client disconnects.
+            # 2) Drain live events from the queue. A short keepalive interval
+            # (5s) means a disconnected client is noticed within one yield
+            # attempt; the generator then unwinds via GeneratorExit and the
+            # finally clause releases the request thread.
             last_event = time.monotonic()
             while True:
                 try:
                     ev = q.get(timeout=_CHAT_STREAM_POLL_S)
+                    # Poison pill from the subscribe-side evictor: stop cleanly.
+                    if ev.get('type') == '__shutdown__':
+                        return
                     yield ndjson_line(ev)
                     last_event = time.monotonic()
                 except queue.Empty:
@@ -534,6 +554,9 @@ def _chat_stream_view():
                             'created_at_ms': int(time.time() * 1000),
                         })
                         last_event = time.monotonic()
+        except (GeneratorExit, BrokenPipeError, ConnectionResetError):
+            # Client disconnected. Fall through to finally.
+            pass
         finally:
             _chat_unsubscribe(context_id, q)
 

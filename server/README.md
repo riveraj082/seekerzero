@@ -33,8 +33,12 @@ start.
     `created_at_ms > since_ms` as `user_msg`/`final` events, then yields
     live events (`user_msg`, `delta`, `final`, `keepalive`) from an
     in-memory pub/sub as they occur. Holds the connection until the
-    client disconnects. `keepalive` is emitted every 25s of idle to
-    keep intermediaries from closing the connection.
+    client disconnects. `keepalive` is emitted every 5s of idle so a
+    dead TCP connection is noticed within one yield attempt and the
+    request thread is released. Each context holds at most one live
+    subscriber; a new subscribe evicts any prior subscriber (stale
+    clients from aggressive reconnects pile up otherwise and starve
+    Flask's thread pool).
 - `stub_approvals.json` — sample approval list. Deploys to
   `/a0/usr/seekerzero/stub_approvals.json` on a0prod. Edit to change what
   the phone sees; the handler reads it on every request. Writes go
