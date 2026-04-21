@@ -46,36 +46,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun switchContext(contextId: String) {
-        if (contextId == activeContextId.value) return
-        ConfigManager.activeChatContext = contextId
-    }
-
-    fun createAndSwitch() {
-        viewModelScope.launch {
-            repo.createContext().onSuccess { newId ->
-                ConfigManager.activeChatContext = newId
-            }
-        }
-    }
-
-    fun delete(contextId: String) {
-        viewModelScope.launch {
-            val wasActive = contextId == activeContextId.value
-            repo.deleteContext(contextId).onSuccess {
-                if (wasActive) {
-                    val fallback = repo.remoteContexts.value.firstOrNull()?.id
-                        ?: ChatRepository.DEFAULT_CONTEXT
-                    ConfigManager.activeChatContext = fallback
-                }
-            }
-        }
-    }
-
-    fun refreshContexts() {
-        viewModelScope.launch { repo.refreshContexts() }
-    }
-
     private fun ChatMessageEntity.toUi() = ChatMessage(
         id = id,
         role = if (role == "user") ChatRole.USER else ChatRole.ASSISTANT,

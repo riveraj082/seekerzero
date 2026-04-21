@@ -32,27 +32,56 @@ _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 
 
 def _extract_final_text(agent) -> str:
-    """Pull the final assistant text from the most recent response log item.
+    """Pull the final assistant text from the most recent response log item,
+    defensively expand any surviving §§include(...) references, then strip
+    A0's task-stats footer so the phone only sees the actual reply.
+
     The web UI's LiveResponse extension appends to a log item of type
     'response' on each parseable chunk; by monologue_end, its content is
-    the complete assistant reply.
+    the complete assistant reply. A0's _05_task_stats_display extension
+    then appends a cost / timing / budget footer after a `---` horizontal
+    rule — informative on desktop, visually heavy on a small screen, so
+    we strip it here. The footer starts at the first `---` line and runs
+    to end-of-content; we cut there.
 
-    Defensively expands any surviving §§include(...) references. A0's
-    ReplaceIncludeAlias extension normally handles this at response_stream
-    time, but if a reference slipped through (e.g. the file was written
-    after that chunk was processed) the raw placeholder would otherwise
-    leak to the phone. Not a substitute for the upstream fix — just a
-    display safety net."""
+    Includes expansion is a safety net for a known upstream race (see
+    project_a0_save_tool_call_race.md); A0's ReplaceIncludeAlias
+    extension normally handles it at response_stream time."""
     try:
         logs = agent.context.log.logs
         for item in reversed(logs):
             if getattr(item, 'type', None) == 'response':
                 content = getattr(item, 'content', '')
                 if isinstance(content, str) and content:
-                    return _safe_expand_includes(content)
+                    expanded = _safe_expand_includes(content)
+                    return _strip_task_stats_footer(expanded)
     except Exception:
         pass
     return ''
+
+
+def _strip_task_stats_footer(text: str) -> str:
+    """Remove A0's task-stats footer. The footer is appended by the
+    _05_task_stats_display monologue_end extension in the form:
+
+        <assistant reply text>
+        ---
+        ⏱ Task completed in 4.8s
+        <cost table, cache line, daily budget line>
+
+    Cut at the first line that is exactly "---" after some reply text."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    cut = None
+    for i, line in enumerate(lines):
+        if line.strip() == '---' and i > 0:
+            cut = i
+            break
+    if cut is None:
+        return text
+    trimmed = '\n'.join(lines[:cut]).rstrip()
+    return trimmed
 
 
 def _safe_expand_includes(text: str) -> str:
