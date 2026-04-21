@@ -16,9 +16,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import urllib.error
-import urllib.request
-
 from flask import Flask, Request, Response, request as flask_request, stream_with_context
 
 from python.helpers.api import ApiHandler, Input, Output, ThreadLockType
@@ -34,24 +31,24 @@ _SINCE_LOOKBACK_CAP_MS = 24 * 60 * 60 * 1000
 
 _stub_write_lock = threading.Lock()
 
-# ---- Chat (Phase 5 Step 2) ----------------------------------------------
+# ---- Chat (Phase 5 Step 4a: routed through A0 agent loop) ----------------
 _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 _CHAT_DEFAULT_CONTEXT = 'mobile-seekerzero'
 _CHAT_DISPLAY_NAME = {'mobile-seekerzero': 'Seeker'}
 _CHAT_HISTORY_DEFAULT_LIMIT = 50
 _CHAT_HISTORY_MAX_LIMIT = 500
-_CHAT_TURN_LOOKBACK = 20  # how many prior messages to feed the model
-_CHAT_OLLAMA_URL = 'http://YOUR_LAN_IP:11434/api/chat'
-_CHAT_OLLAMA_MODEL = 'a0-work'
 _CHAT_STREAM_KEEPALIVE_S = 5.0
 _CHAT_STREAM_POLL_S = 0.25
 _CHAT_STREAM_MAX_SUBS_PER_CONTEXT = 1
 
 _chat_log_lock = threading.Lock()
-_chat_busy_lock = threading.Lock()
-_chat_busy_contexts: Dict[str, bool] = {}
-_chat_subs_lock = threading.Lock()
-_chat_subscribers: Dict[str, List['queue.Queue[dict]']] = {}
+
+# Pub/sub, turn-state, and busy-flag all live on the AgentContext.data dict,
+# keyed at CHAT_BUS_KEY. The context is the only object that both the Flask
+# handler (loaded by extract_tools, no sys.modules entry) and the stream
+# extensions (likewise) reliably share — module-level globals in this file
+# are per-module-instance and do NOT cross that boundary. See get_chat_bus().
+CHAT_BUS_KEY = '_seekerzero_chat_bus'
 
 
 def _client_ip() -> str:
@@ -257,6 +254,27 @@ def _chat_append_log(context_id: str, record: Dict[str, Any]) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
 
+def get_chat_bus(context_id: str) -> Dict[str, Any]:
+    """Return the shared bus dict for a mobile chat context. Creates the
+    context (and the bus) on first access. The bus lives on context.data
+    so handler + extensions (which are loaded via extract_tools and do not
+    share module-level globals) see the same object.
+    """
+    ctx = _chat_get_or_create_context(context_id)
+    bus = ctx.data.get(CHAT_BUS_KEY)
+    if bus is None:
+        bus = {
+            'subs_lock': threading.Lock(),
+            'subscribers': [],
+            'busy_lock': threading.Lock(),
+            'busy': False,
+            'turn_lock': threading.Lock(),
+            'turn_state': None,  # dict when a turn is in flight, else None
+        }
+        ctx.data[CHAT_BUS_KEY] = bus
+    return bus
+
+
 def _chat_subscribe(context_id: str) -> 'queue.Queue[dict]':
     """Subscribe to a context's event stream.
 
@@ -264,9 +282,10 @@ def _chat_subscribe(context_id: str) -> 'queue.Queue[dict]':
     aggressive client reconnects are evicted rather than piling up and
     starving the Flask request-thread pool. Evicted queues get a poison
     pill so their generator can exit cleanly on next read."""
+    bus = get_chat_bus(context_id)
     q: queue.Queue[dict] = queue.Queue(maxsize=1024)
-    with _chat_subs_lock:
-        bucket = _chat_subscribers.setdefault(context_id, [])
+    with bus['subs_lock']:
+        bucket = bus['subscribers']
         while len(bucket) >= _CHAT_STREAM_MAX_SUBS_PER_CONTEXT:
             evicted = bucket.pop(0)
             try:
@@ -278,15 +297,16 @@ def _chat_subscribe(context_id: str) -> 'queue.Queue[dict]':
 
 
 def _chat_unsubscribe(context_id: str, q: 'queue.Queue[dict]') -> None:
-    with _chat_subs_lock:
-        subs = _chat_subscribers.get(context_id)
-        if subs and q in subs:
-            subs.remove(q)
+    bus = get_chat_bus(context_id)
+    with bus['subs_lock']:
+        if q in bus['subscribers']:
+            bus['subscribers'].remove(q)
 
 
 def _chat_publish(context_id: str, event: Dict[str, Any]) -> None:
-    with _chat_subs_lock:
-        subs = list(_chat_subscribers.get(context_id, []))
+    bus = get_chat_bus(context_id)
+    with bus['subs_lock']:
+        subs = list(bus['subscribers'])
     for q in subs:
         try:
             q.put_nowait(event)
@@ -296,99 +316,90 @@ def _chat_publish(context_id: str, event: Dict[str, Any]) -> None:
 
 def _chat_set_busy(context_id: str, value: bool) -> bool:
     """Returns True if state was changed (i.e. wasn't already the same)."""
-    with _chat_busy_lock:
-        cur = _chat_busy_contexts.get(context_id, False)
-        if value and cur:
+    bus = get_chat_bus(context_id)
+    with bus['busy_lock']:
+        if value and bus['busy']:
             return False
-        _chat_busy_contexts[context_id] = value
+        bus['busy'] = value
         return True
 
 
 def _chat_is_busy(context_id: str) -> bool:
-    with _chat_busy_lock:
-        return _chat_busy_contexts.get(context_id, False)
+    bus = get_chat_bus(context_id)
+    with bus['busy_lock']:
+        return bus['busy']
 
 
-def _chat_build_messages(context_id: str, new_user_text: str) -> List[Dict[str, str]]:
-    log = _chat_read_log(context_id)
-    # Only final messages; dropped ones and in-flight assistant scaffolding are excluded.
-    finals = [m for m in log if m.get('is_final')]
-    tail = finals[-_CHAT_TURN_LOOKBACK:]
-    msgs: List[Dict[str, str]] = []
-    for m in tail:
-        role = m.get('role')
-        content = m.get('content', '')
-        if role in ('user', 'assistant') and content:
-            msgs.append({'role': role, 'content': content})
-    msgs.append({'role': 'user', 'content': new_user_text})
-    return msgs
+def chat_turn_state_get(context_id: str) -> Optional[Dict[str, Any]]:
+    """Called by response_stream + monologue_end extensions to learn the
+    pre-allocated assistant_message_id and running delta position for a turn.
+    """
+    bus = get_chat_bus(context_id)
+    with bus['turn_lock']:
+        s = bus['turn_state']
+        return dict(s) if s else None
 
 
-def _chat_stream_from_ollama(context_id: str, assistant_id: str, messages: List[Dict[str, str]]) -> None:
-    """Background worker: call Ollama, publish delta events, persist final."""
-    buf: List[str] = []
-    body = json.dumps({
-        'model': _CHAT_OLLAMA_MODEL,
-        'messages': messages,
-        'stream': True,
-    }).encode('utf-8')
-    req = urllib.request.Request(
-        _CHAT_OLLAMA_URL,
-        data=body,
-        headers={'Content-Type': 'application/json'},
-        method='POST',
-    )
+def chat_turn_state_set_emitted_len(context_id: str, new_len: int) -> None:
+    bus = get_chat_bus(context_id)
+    with bus['turn_lock']:
+        if bus['turn_state'] is not None:
+            bus['turn_state']['emitted_len'] = new_len
+
+
+def chat_turn_state_clear(context_id: str) -> Optional[Dict[str, Any]]:
+    bus = get_chat_bus(context_id)
+    with bus['turn_lock']:
+        prev = bus['turn_state']
+        bus['turn_state'] = None
+        return dict(prev) if prev else None
+
+
+def _chat_get_or_create_context(context_id: str):
+    """Get the persistent A0 context for mobile chat, creating it on first use.
+    Import is local so the module loads cleanly even if imported from a
+    context where A0's agent framework isn't available (e.g. ad-hoc tests).
+    """
+    from agent import AgentContext
+    from initialize import initialize_agent
+
+    ctx = AgentContext.get(context_id)
+    if ctx is None:
+        ctx = AgentContext(config=initialize_agent(), id=context_id)
+    return ctx
+
+
+def _chat_dispatch_to_a0(context_id: str, user_text: str, assistant_id: str) -> bool:
+    """Kick off an A0 turn for the given context. Returns True on success.
+    The assistant reply arrives as live events emitted by the mobile
+    response_stream + monologue_end extensions; nothing is awaited here."""
+    from agent import UserMessage
+
+    bus = get_chat_bus(context_id)
+    with bus['turn_lock']:
+        bus['turn_state'] = {
+            'assistant_id': assistant_id,
+            'emitted_len': 0,
+            'started_at_ms': int(time.time() * 1000),
+        }
+
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            for raw in resp:
-                line = raw.decode('utf-8', errors='replace').strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                msg = obj.get('message') or {}
-                delta = msg.get('content', '')
-                if delta:
-                    buf.append(delta)
-                    _chat_publish(context_id, {
-                        'type': 'delta',
-                        'message_id': assistant_id,
-                        'role': 'assistant',
-                        'delta': delta,
-                        'created_at_ms': int(time.time() * 1000),
-                    })
-                if obj.get('done'):
-                    break
-    except (urllib.error.URLError, OSError, TimeoutError) as e:
-        err_text = f'[error talking to a0-work: {e!s}]'
-        buf.append(err_text)
-        _chat_publish(context_id, {
-            'type': 'delta',
-            'message_id': assistant_id,
-            'role': 'assistant',
-            'delta': err_text,
-            'created_at_ms': int(time.time() * 1000),
-        })
-    finally:
-        full = ''.join(buf)
-        final_ms = int(time.time() * 1000)
-        _chat_append_log(context_id, {
-            'id': assistant_id,
-            'role': 'assistant',
-            'content': full,
-            'created_at_ms': final_ms,
-            'is_final': True,
-        })
+        ctx = _chat_get_or_create_context(context_id)
+        ctx.communicate(UserMessage(message=user_text, attachments=[]))
+        return True
+    except Exception as e:
+        # Roll back turn state so the next send isn't stuck waiting for a
+        # reply that will never come.
+        chat_turn_state_clear(context_id)
+        _chat_set_busy(context_id, False)
         _chat_publish(context_id, {
             'type': 'final',
             'message_id': assistant_id,
             'role': 'assistant',
-            'content': full,
-            'created_at_ms': final_ms,
+            'content': f'[error dispatching to A0: {e!s}]',
+            'created_at_ms': int(time.time() * 1000),
         })
-        _chat_set_busy(context_id, False)
+        return False
 
 
 # ---- Chat views ---------------------------------------------------------
@@ -474,13 +485,17 @@ def _chat_send_view():
         'created_at_ms': now_ms,
     })
 
-    messages = _chat_build_messages(context_id, content)
-    threading.Thread(
-        target=_chat_stream_from_ollama,
-        args=(context_id, assistant_id, messages),
-        daemon=True,
-        name=f'chat-stream-{assistant_id}',
-    ).start()
+    # Hand off to A0's agent loop. The reply will arrive asynchronously as
+    # delta events (from the response_stream extension) and a final event
+    # (from the monologue_end extension), both of which publish to the
+    # same pub/sub the client is subscribed to via /mobile/chat/stream.
+    if not _chat_dispatch_to_a0(context_id, content, assistant_id):
+        # _chat_dispatch_to_a0 already cleared busy + published an error final.
+        return Response(
+            json.dumps({'ok': False, 'error': 'a0 dispatch failed'}),
+            status=502,
+            mimetype='application/json',
+        )
 
     body = {
         'ok': True,

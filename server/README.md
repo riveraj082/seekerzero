@@ -7,7 +7,34 @@ start.
 
 ## Files
 
-- `seekerzero_mobile_api.py` — the handler. Routes:
+- `seekerzero_mobile_api.py` — the handler. Phase 5 Step 4a: `/mobile/chat/*`
+  now routes through A0's real agent loop (not a direct Ollama call). On
+  `/chat/send` the handler does `AgentContext.get('mobile-seekerzero')
+  or create` → `ctx.communicate(UserMessage(content))` and returns
+  immediately. The assistant reply is emitted asynchronously as `delta`
+  and `final` events by two extensions that hook A0's streaming pipeline
+  (see `extensions/`).
+- `extensions/response_stream/_99_seekerzero_forward.py` — hooks A0's
+  `response_stream` extension point. When the agent is invoking the
+  `response` tool for the `mobile-seekerzero` context, this diffs
+  `tool_args.text` against the running emitted length and publishes
+  `delta` events to the in-memory pub/sub that `/mobile/chat/stream`
+  subscribers drain.
+- `extensions/monologue_end/_99_seekerzero_final.py` — hooks A0's
+  `monologue_end` extension point. When a top-level agent turn completes
+  for the `mobile-seekerzero` context, this reads the final assistant
+  text from the context log, writes a row to the JSONL mirror
+  (`/a0/usr/seekerzero/chat/mobile-seekerzero.jsonl`, used by
+  `/chat/history`), publishes a `final` event, and clears the busy flag.
+- Shared state (subscribers, turn-state, busy flag) lives on
+  `AgentContext.data['_seekerzero_chat_bus']`. This is load-bearing:
+  handler + extensions are both loaded via `extract_tools.import_module`
+  which bypasses `sys.modules`, so module-level globals in this file do
+  NOT cross that boundary. The context is the only reliable shared
+  object (singleton keyed by id via `AgentContext._contexts`). See
+  `get_chat_bus()`.
+
+Routes:
   - `GET /mobile/health` — subordinate health snapshot (stubbed values).
   - `GET /mobile/approvals/pending` — current list of open approval gates.
   - `GET /mobile/approvals/stream?since=<ms>` — long-poll, 60s hold, 24h
@@ -24,10 +51,13 @@ start.
     paginated backlog. `before_ms` is exclusive; omit to get the latest
     `limit` messages (default 50, cap 500).
   - `POST /mobile/chat/send` — body `{context, content}`. Appends the
-    user message to the log and kicks off an async `a0-work` call in a
-    background thread. Returns `{ok, user_message_id,
-    assistant_message_id, created_at_ms}` immediately. Returns 409 if
-    the context is already streaming a reply.
+    user message to the JSONL mirror, pre-allocates an
+    `assistant_message_id`, stores it on the context's chat bus as the
+    active turn state, and calls `ctx.communicate(UserMessage(content))`
+    to start a real A0 turn. Returns `{ok, user_message_id,
+    assistant_message_id, created_at_ms}` immediately. The reply arrives
+    via the stream, not this POST. Returns 409 if the context is already
+    streaming a reply.
   - `GET /mobile/chat/stream?context=<id>&since=<ms>` — **NDJSON** long-
     lived stream. Replays `is_final` log entries with
     `created_at_ms > since_ms` as `user_msg`/`final` events, then yields
