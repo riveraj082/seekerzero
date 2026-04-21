@@ -11,8 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Done
-import androidx.compose.material.icons.outlined.HealthAndSafety
-import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -51,9 +49,7 @@ private data class TabDef(
 private val TABS = listOf(
     TabDef("chat", R.string.tab_chat, Icons.AutoMirrored.Outlined.Chat),
     TabDef("approvals", R.string.tab_approvals, Icons.Outlined.Done),
-    TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment),
-    TabDef("cost", R.string.tab_cost, Icons.Outlined.Paid),
-    TabDef("diagnostics", R.string.tab_diagnostics, Icons.Outlined.HealthAndSafety)
+    TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment)
 )
 
 @Composable
@@ -108,8 +104,6 @@ fun MainScaffold() {
                 composable("chat") { ChatScreen() }
                 composable("approvals") { ApprovalsScreen() }
                 composable("tasks") { TasksScreenStub() }
-                composable("cost") { CostScreenStub() }
-                composable("diagnostics") { DiagnosticsScreenStub() }
             }
         }
     }
@@ -120,18 +114,6 @@ fun MainScaffold() {
 private fun TasksScreenStub() = TabStub(
     title = stringResource(R.string.tab_tasks),
     body = stringResource(R.string.stub_tasks_body)
-)
-
-@Composable
-private fun CostScreenStub() = TabStub(
-    title = stringResource(R.string.tab_cost),
-    body = stringResource(R.string.stub_cost_body)
-)
-
-@Composable
-private fun DiagnosticsScreenStub() = TabStub(
-    title = stringResource(R.string.tab_diagnostics),
-    body = stringResource(R.string.stub_diagnostics_body)
 )
 
 @Composable

@@ -39,14 +39,10 @@
     <string name="tab_chat">Chat</string>
     <string name="tab_approvals">Approvals</string>
     <string name="tab_tasks">Tasks</string>
-    <string name="tab_cost">Cost</string>
-    <string name="tab_diagnostics">Diagnostics</string>
 
     <!-- Tab stub placeholders -->
     <string name="stub_approvals_body">Pending approval gates will appear here.</string>
     <string name="stub_tasks_body">Scheduled tasks from Agent Zero will appear here.</string>
-    <string name="stub_cost_body">Daily / 7-day / 30-day cost rollups will appear here.</string>
-    <string name="stub_diagnostics_body">Connection, fleet health, and build info will appear here.</string>
 
     <!-- Chat -->
     <string name="chat_empty_title">Start a conversation</string>
