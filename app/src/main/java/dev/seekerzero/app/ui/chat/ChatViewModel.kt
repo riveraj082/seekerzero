@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.seekerzero.app.chat.ChatMessageEntity
 import dev.seekerzero.app.chat.ChatRepository
+import dev.seekerzero.app.util.ServiceState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -21,10 +22,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val streaming: StateFlow<Boolean> = repo.streaming
-    val connected: StateFlow<Boolean> = repo.connected
 
-    fun attach() = repo.attach(contextId)
-    fun detach() = repo.detach()
+    fun attach() = ServiceState.setChatAttached(true)
+    fun detach() = ServiceState.setChatAttached(false)
 
     fun send(text: String) {
         viewModelScope.launch {

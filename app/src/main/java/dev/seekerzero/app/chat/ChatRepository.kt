@@ -4,35 +4,25 @@ import android.content.Context
 import dev.seekerzero.app.api.MobileApiClient
 import dev.seekerzero.app.api.models.ChatMessageDto
 import dev.seekerzero.app.util.LogCollector
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Owns the chat data layer: Room-backed persistence, REST calls for send/history,
- * and the long-lived NDJSON stream. Singleton; attach/detach is reference-counted
- * so multiple attached screens share one stream.
+ * Data layer for chat. Owns the Room cache and the REST calls for send/history.
+ * Does NOT own the NDJSON stream — that lives in SeekerZeroService and routes
+ * events in via [applyEvent].
  */
 class ChatRepository private constructor(
-    private val db: ChatDatabase,
-    private val io: CoroutineScope
+    private val db: ChatDatabase
 ) {
 
     companion object {
         const val DEFAULT_CONTEXT = "mobile-seekerzero"
         private const val CACHE_CAP_PER_CONTEXT = 500
-        private const val RECONNECT_DELAY_MS = 2000L
         private const val TAG = "ChatRepository"
 
         @Volatile
@@ -41,8 +31,7 @@ class ChatRepository private constructor(
         fun get(context: Context): ChatRepository {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: ChatRepository(
-                    db = ChatDatabase.get(context.applicationContext),
-                    io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                    db = ChatDatabase.get(context.applicationContext)
                 ).also { INSTANCE = it }
             }
         }
@@ -53,35 +42,11 @@ class ChatRepository private constructor(
     private val _streaming = MutableStateFlow(false)
     val streaming: StateFlow<Boolean> = _streaming.asStateFlow()
 
-    private val _connected = MutableStateFlow(false)
-    val connected: StateFlow<Boolean> = _connected.asStateFlow()
-
-    private val attachMutex = Any()
-    private var attachCount = 0
-    private var streamJob: Job? = null
-
     fun messages(contextId: String = DEFAULT_CONTEXT): Flow<List<ChatMessageEntity>> =
         dao.observe(contextId)
 
-    fun attach(contextId: String = DEFAULT_CONTEXT) {
-        synchronized(attachMutex) {
-            attachCount += 1
-            if (attachCount == 1 && streamJob == null) {
-                streamJob = io.launch { runStreamLoop(contextId) }
-            }
-        }
-    }
-
-    fun detach() {
-        synchronized(attachMutex) {
-            attachCount = (attachCount - 1).coerceAtLeast(0)
-            if (attachCount == 0) {
-                streamJob?.cancel()
-                streamJob = null
-                _connected.value = false
-            }
-        }
-    }
+    suspend fun maxFinalMs(contextId: String = DEFAULT_CONTEXT): Long =
+        dao.maxFinalCreatedAt(contextId) ?: 0L
 
     suspend fun refreshHistory(contextId: String = DEFAULT_CONTEXT, limit: Int = 50) {
         MobileApiClient.chatHistory(contextId, limit = limit)
@@ -104,8 +69,7 @@ class ChatRepository private constructor(
 
         val result = MobileApiClient.chatSend(contextId, trimmed)
         result.onSuccess { resp ->
-            // Optimistically insert user + placeholder assistant so the UI updates immediately,
-            // in case the stream hasn't delivered the user_msg event yet.
+            // Optimistic inserts so the UI updates before the stream delivers the events.
             dao.upsert(
                 ChatMessageEntity(
                     context_id = contextId,
@@ -131,29 +95,11 @@ class ChatRepository private constructor(
         return result.map { it.assistantMessageId }
     }
 
-    private suspend fun runStreamLoop(contextId: String) {
-        while (io.isActive) {
-            try {
-                // Re-fetch recent history on each (re)connect so we don't miss anything written
-                // while disconnected.
-                refreshHistory(contextId)
-                val sinceMs = dao.maxFinalCreatedAt(contextId) ?: 0L
-                _connected.value = true
-                MobileApiClient.chatStream(contextId, sinceMs) { obj ->
-                    handleEvent(contextId, obj)
-                }
-                _connected.value = false
-            } catch (t: Throwable) {
-                if (!io.isActive) break
-                LogCollector.w(TAG, "stream ended: ${t.message}")
-                _connected.value = false
-                _streaming.value = false
-                delay(RECONNECT_DELAY_MS)
-            }
-        }
-    }
-
-    private suspend fun handleEvent(contextId: String, obj: JsonObject) {
+    /**
+     * Route an NDJSON event from the service's stream into Room.
+     * No-op for unknown types (including `keepalive`).
+     */
+    suspend fun applyEvent(contextId: String, obj: JsonObject) {
         val type = obj["type"]?.jsonPrimitive?.content ?: return
         when (type) {
             "user_msg" -> {
@@ -209,8 +155,11 @@ class ChatRepository private constructor(
                 dao.trim(contextId, CACHE_CAP_PER_CONTEXT)
                 _streaming.value = false
             }
-            "keepalive" -> { /* no-op */ }
         }
+    }
+
+    fun markStreamingIdle() {
+        _streaming.value = false
     }
 
     private fun ChatMessageDto.toEntity(contextId: String) = ChatMessageEntity(
@@ -221,9 +170,4 @@ class ChatRepository private constructor(
         created_at_ms = createdAtMs,
         is_final = isFinal
     )
-
-    fun shutdown() {
-        io.cancel()
-        INSTANCE = null
-    }
 }

@@ -157,8 +157,12 @@ object MobileApiClient {
         val request = Request.Builder().url(url).get().build()
         val call = chatStreamClient.newCall(request)
 
-        withContext(Dispatchers.IO) {
-            try {
+        // Proactively cancel the blocking OkHttp read when the calling coroutine is cancelled.
+        val cancelHandle = coroutineContext[kotlinx.coroutines.Job]
+            ?.invokeOnCompletion { runCatching { call.cancel() } }
+
+        try {
+            withContext(Dispatchers.IO) {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         throw IOException("HTTP ${response.code} on chat stream")
@@ -173,9 +177,10 @@ object MobileApiClient {
                         onEvent(obj)
                     }
                 }
-            } finally {
-                runCatching { call.cancel() }
             }
+        } finally {
+            cancelHandle?.dispose()
+            runCatching { call.cancel() }
         }
     }
 

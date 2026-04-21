@@ -19,6 +19,9 @@ object ServiceState {
     private val _reconnectCount = MutableStateFlow(0)
     val reconnectCount: StateFlow<Int> = _reconnectCount
 
+    private val _chatAttached = MutableStateFlow(false)
+    val chatAttached: StateFlow<Boolean> = _chatAttached
+
     fun setConnectionState(state: ConnectionState) {
         _connectionState.value = state
     }
@@ -46,5 +49,9 @@ object ServiceState {
 
     fun incrementReconnectCount() {
         _reconnectCount.value = _reconnectCount.value + 1
+    }
+
+    fun setChatAttached(attached: Boolean) {
+        _chatAttached.value = attached
     }
 }

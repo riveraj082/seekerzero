@@ -18,6 +18,7 @@ import dev.seekerzero.app.MainActivity
 import dev.seekerzero.app.SeekerZeroApplication
 import dev.seekerzero.app.api.MobileApiClient
 import dev.seekerzero.app.api.models.Approval
+import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.util.LogCollector
@@ -27,15 +28,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class SeekerZeroService : Service() {
 
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var pollJob: Job? = null
+    private var chatControllerJob: Job? = null
+    private var lastSinceMs: Long? = null
+    private val seenApprovalIds = mutableSetOf<String>()
+    private val watchdog = ConnectionWatchdog()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
     companion object {
         private const val TAG = "SeekerZeroService"
         private const val SERVICE_NOTIFICATION_ID = 1
         private const val APPROVAL_NOTIFICATION_ID_BASE = 1000
+        private const val CHAT_RECONNECT_DELAY_MS = 2000L
 
         fun start(context: Context) {
             val intent = Intent(context, SeekerZeroService::class.java)
@@ -50,13 +64,6 @@ class SeekerZeroService : Service() {
             context.stopService(Intent(context, SeekerZeroService::class.java))
         }
     }
-
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var pollJob: Job? = null
-    private var lastSinceMs: Long? = null
-    private val seenApprovalIds = mutableSetOf<String>()
-    private val watchdog = ConnectionWatchdog()
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -105,12 +112,14 @@ class SeekerZeroService : Service() {
         startForegroundWithNotification()
         ConfigManager.serviceEnabled = true
         startPolling()
+        startChatController()
         return START_STICKY
     }
 
     override fun onDestroy() {
         LogCollector.d(TAG, "onDestroy")
         pollJob?.cancel()
+        chatControllerJob?.cancel()
         scope.cancel()
         unregisterNetworkCallback()
         ServiceState.setConnectionState(ConnectionState.DISCONNECTED)
@@ -198,6 +207,49 @@ class SeekerZeroService : Service() {
                 LogCollector.w(TAG, "stream error: ${err.message}")
                 watchdog.waitBeforeRetry()
             }
+        }
+    }
+
+    private fun startChatController() {
+        if (chatControllerJob?.isActive == true) return
+        val repo = ChatRepository.get(applicationContext)
+        chatControllerJob = scope.launch {
+            combine(ServiceState.chatAttached, repo.streaming) { attached, streaming ->
+                attached || streaming
+            }
+                .distinctUntilChanged()
+                .collectLatest { shouldStream ->
+                    if (!shouldStream) {
+                        LogCollector.d(TAG, "chat stream: idle (attached=false, streaming=false)")
+                        return@collectLatest
+                    }
+                    LogCollector.d(TAG, "chat stream: opening")
+                    try {
+                        while (scope.isActive) {
+                            try {
+                                repo.refreshHistory()
+                                val sinceMs = repo.maxFinalMs()
+                                MobileApiClient.chatStream(
+                                    contextId = ChatRepository.DEFAULT_CONTEXT,
+                                    sinceMs = sinceMs
+                                ) { event ->
+                                    repo.applyEvent(ChatRepository.DEFAULT_CONTEXT, event)
+                                }
+                                // Stream returned cleanly (unlikely with readTimeout=0); loop to reconnect.
+                                LogCollector.d(TAG, "chat stream ended cleanly; reconnecting")
+                            } catch (t: Throwable) {
+                                if (!scope.isActive) throw t
+                                LogCollector.w(TAG, "chat stream error: ${t.message}; retrying")
+                                delay(CHAT_RECONNECT_DELAY_MS)
+                            }
+                        }
+                    } finally {
+                        LogCollector.d(TAG, "chat stream: closing")
+                        // If a reply was in flight when we got cancelled mid-drain, clear the
+                        // streaming flag so the UI doesn't stay pinned to "replying".
+                        repo.markStreamingIdle()
+                    }
+                }
         }
     }
 
