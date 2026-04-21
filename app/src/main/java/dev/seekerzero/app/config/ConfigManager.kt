@@ -16,6 +16,7 @@ object ConfigManager {
     private const val K_LAST_CONTACT = "last_contact_at_ms"
     private const val K_SERVICE_ENABLED = "service_enabled"
     private const val K_ACTIVE_CHAT_CONTEXT = "active_chat_context"
+    private const val K_DEMO_MODE = "demo_mode"
 
     private const val DEFAULT_API_BASE = "/mobile"
     private const val DEFAULT_PORT = 50080
@@ -47,6 +48,9 @@ object ConfigManager {
     private val _activeChatContext = MutableStateFlow(DEFAULT_CHAT_CONTEXT)
     val activeChatContextFlow: StateFlow<String> = _activeChatContext
 
+    private val _demoMode = MutableStateFlow(false)
+    val demoModeFlow: StateFlow<Boolean> = _demoMode
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         _a0Host.value = prefs.getString(K_A0_HOST, null)
@@ -58,6 +62,7 @@ object ConfigManager {
         _serviceEnabled.value = prefs.getBoolean(K_SERVICE_ENABLED, false)
         _activeChatContext.value = prefs.getString(K_ACTIVE_CHAT_CONTEXT, DEFAULT_CHAT_CONTEXT)
             ?: DEFAULT_CHAT_CONTEXT
+        _demoMode.value = prefs.getBoolean(K_DEMO_MODE, false)
     }
 
     var a0Host: String?
@@ -116,6 +121,35 @@ object ConfigManager {
             prefs.edit().putString(K_ACTIVE_CHAT_CONTEXT, v).apply()
             _activeChatContext.value = v
         }
+
+    var demoMode: Boolean
+        get() = _demoMode.value
+        set(value) {
+            prefs.edit().putBoolean(K_DEMO_MODE, value).apply()
+            _demoMode.value = value
+        }
+
+    /**
+     * Pre-fill config with placeholder values so `isConfigured()` returns
+     * true without a QR scan. Used by the "Enter demo mode" path on the
+     * Setup screen to unlock MainScaffold without real a0prod info.
+     */
+    fun applyDemoDefaults() {
+        prefs.edit()
+            .putString(K_A0_HOST, "demo.local")
+            .putInt(K_PORT, DEFAULT_PORT)
+            .putString(K_MOBILE_API_BASE, DEFAULT_API_BASE)
+            .putString(K_CLIENT_ID, "demo-client")
+            .putString(K_DISPLAY_NAME, "Demo")
+            .putBoolean(K_DEMO_MODE, true)
+            .apply()
+        _a0Host.value = "demo.local"
+        _port.value = DEFAULT_PORT
+        _mobileApiBase.value = DEFAULT_API_BASE
+        _clientId.value = "demo-client"
+        _displayName.value = "Demo"
+        _demoMode.value = true
+    }
 
     fun isConfigured(): Boolean = a0Host != null && clientId != null
 

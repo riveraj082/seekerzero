@@ -79,7 +79,11 @@ fun SetupScreen(
                     onScan = {
                         qrLauncher.launch(Intent(context, QrScannerActivity::class.java))
                     },
-                    onManual = viewModel::onManualEntrySelected
+                    onManual = viewModel::onManualEntrySelected,
+                    onDemo = {
+                        dev.seekerzero.app.config.ConfigManager.applyDemoDefaults()
+                        onSetupComplete()
+                    }
                 )
 
                 is SetupUiState.ManualEntry -> ManualEntryBody(
@@ -130,7 +134,7 @@ fun SetupScreen(
 }
 
 @Composable
-private fun WelcomeBody(onScan: () -> Unit, onManual: () -> Unit) {
+private fun WelcomeBody(onScan: () -> Unit, onManual: () -> Unit, onDemo: () -> Unit) {
     CardSurface(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Column(modifier = Modifier.padding(20.dp)) {
             SectionLabel(title = stringResource(R.string.setup_welcome_header))
@@ -151,6 +155,10 @@ private fun WelcomeBody(onScan: () -> Unit, onManual: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = onManual, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.setup_manual_cta), color = SeekerZeroColors.Accent)
+            }
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = onDemo, modifier = Modifier.fillMaxWidth()) {
+                Text("Start demo mode (no server needed)", color = SeekerZeroColors.TextDisabled)
             }
         }
     }

@@ -1,5 +1,6 @@
 package dev.seekerzero.app.ssh
 
+import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.LogCollector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -71,16 +72,27 @@ object SshClient {
     )
     val shellOutput: SharedFlow<ByteArray> = _shellOutput.asSharedFlow()
 
-    val isConnected: Boolean get() = ssh?.isConnected == true && ssh?.isAuthenticated == true
-    val hasShell: Boolean get() = shellCommand != null
+    @Volatile private var demoConnected: Boolean = false
+    @Volatile private var demoShellOpen: Boolean = false
+
+    val isConnected: Boolean
+        get() = if (ConfigManager.demoMode) demoConnected
+                else ssh?.isConnected == true && ssh?.isAuthenticated == true
+    val hasShell: Boolean
+        get() = if (ConfigManager.demoMode) demoShellOpen else shellCommand != null
 
     suspend fun connect(
         host: String,
         port: Int = 22,
         user: String,
         verifier: net.schmizz.sshj.transport.verification.HostKeyVerifier? = null
-    ): Result<Unit> =
-        withContext(Dispatchers.IO) {
+    ): Result<Unit> {
+        if (ConfigManager.demoMode) {
+            demoConnected = true
+            LogCollector.d(TAG, "demo mode: fake SSH connect to $user@$host")
+            return Result.success(Unit)
+        }
+        return withContext(Dispatchers.IO) {
             runCatching {
                 disconnectInternal()
 
@@ -119,9 +131,6 @@ object SshClient {
             }
         }.onFailure {
             LogCollector.w(TAG, "connect failed: ${it.javaClass.simpleName}: ${it.message}")
-            // Unwind and log the cause chain to surface the actual provider
-            // error (Android Keystore / BouncyCastle integration issues
-            // usually hide their real message two levels deep).
             var cause: Throwable? = it.cause
             var depth = 1
             while (cause != null && depth < 5) {
@@ -130,6 +139,7 @@ object SshClient {
                 depth++
             }
         }
+    }
 
     /**
      * Open a persistent pty shell session. One per SshClient. Output bytes
@@ -139,9 +149,15 @@ object SshClient {
         termType: String = "xterm-256color",
         cols: Int = 80,
         rows: Int = 24
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val client = ssh ?: throw IllegalStateException("not connected")
+    ): Result<Unit> {
+        if (ConfigManager.demoMode) {
+            demoShellOpen = true
+            _shellOutput.emit("a0user@a0prod:~$ ".toByteArray(Charsets.UTF_8))
+            return Result.success(Unit)
+        }
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val client = ssh ?: throw IllegalStateException("not connected")
             closeShellInternal()
             val session = client.startSession()
             session.allocatePTY(termType, cols, rows, 0, 0, emptyMap())
@@ -171,17 +187,48 @@ object SshClient {
                     LogCollector.d(TAG, "shell reader exit")
                 }
             }
-            LogCollector.d(TAG, "shell opened ($termType ${cols}x${rows})")
-        }.onFailure { LogCollector.w(TAG, "openShell failed: ${it.message}") }
+                LogCollector.d(TAG, "shell opened ($termType ${cols}x${rows})")
+            }.onFailure { LogCollector.w(TAG, "openShell failed: ${it.message}") }
+        }
     }
 
     /** Write bytes to the shell's pty stdin. Caller appends any line terminator. */
-    suspend fun sendInput(bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val out = shellInput ?: throw IllegalStateException("shell not open")
-            out.write(bytes)
-            out.flush()
-        }.onFailure { LogCollector.w(TAG, "sendInput failed: ${it.message}") }
+    suspend fun sendInput(bytes: ByteArray): Result<Unit> {
+        if (ConfigManager.demoMode) {
+            // Echo the command, emit a canned response, re-emit a prompt.
+            val cmd = String(bytes, Charsets.UTF_8).trimEnd('\n')
+            val out = StringBuilder()
+            out.append(cmd).append('\n')
+            out.append(demoCommandResponse(cmd)).append('\n')
+            out.append("a0user@a0prod:~$ ")
+            _shellOutput.emit(out.toString().toByteArray(Charsets.UTF_8))
+            return Result.success(Unit)
+        }
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val out = shellInput ?: throw IllegalStateException("shell not open")
+                out.write(bytes)
+                out.flush()
+            }.onFailure { LogCollector.w(TAG, "sendInput failed: ${it.message}") }
+        }
+    }
+
+    /** Canned shell output for demo mode — matches common commands loosely. */
+    private fun demoCommandResponse(cmd: String): String {
+        val c = cmd.trim().lowercase()
+        return when {
+            c == "pwd" -> "/home/a0user"
+            c == "whoami" -> "a0user"
+            c == "uname -a" -> "Linux a0prod 6.18.14-061814-generic #202604151200 SMP Ubuntu x86_64 GNU/Linux"
+            c == "date" -> "Tue Apr 21 16:42:11 EDT 2026"
+            c == "uptime" -> " 16:42:11 up 14 days,  3:22,  1 user,  load average: 0.41, 0.58, 0.62"
+            c == "ls" || c.startsWith("ls ") ->
+                "Desktop  Documents  Downloads  agent-zero-data  host-backups  scripts"
+            c.startsWith("df") -> "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p2  1.9T  312G  1.5T  17% /"
+            c.startsWith("docker ps") -> "CONTAINER ID   IMAGE                  STATUS         NAMES\n76bd2a31b0f7   agent0ai/agent-zero    Up 2 days      agent-zero"
+            c.startsWith("echo ") -> cmd.trim().removePrefix("echo ").trim().trim('\'', '"')
+            else -> "(demo) output of '$cmd' would appear here"
+        }
     }
 
     fun closeShell() {
@@ -189,6 +236,10 @@ object SshClient {
     }
 
     private fun closeShellInternal() {
+        if (ConfigManager.demoMode) {
+            demoShellOpen = false
+            return
+        }
         readerJob?.cancel()
         readerJob = null
         runCatching { shellInput?.close() }
@@ -223,6 +274,10 @@ object SshClient {
 
     private fun disconnectInternal() {
         closeShellInternal()
+        if (ConfigManager.demoMode) {
+            demoConnected = false
+            return
+        }
         val existing = ssh ?: return
         runCatching { existing.disconnect() }
         ssh = null

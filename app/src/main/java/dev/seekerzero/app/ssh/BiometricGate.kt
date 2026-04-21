@@ -34,8 +34,10 @@ object BiometricGate {
     }
 
     /** True if the user has passed biometric within [CACHE_WINDOW_MS]. */
-    fun isUnlocked(): Boolean =
-        System.currentTimeMillis() - lastUnlockAtMs < CACHE_WINDOW_MS
+    fun isUnlocked(): Boolean {
+        if (dev.seekerzero.app.config.ConfigManager.demoMode) return true
+        return System.currentTimeMillis() - lastUnlockAtMs < CACHE_WINDOW_MS
+    }
 
     fun invalidate() {
         lastUnlockAtMs = 0L
