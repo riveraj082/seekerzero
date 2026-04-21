@@ -39,10 +39,19 @@
     <string name="tab_chat">Chat</string>
     <string name="tab_approvals">Approvals</string>
     <string name="tab_tasks">Tasks</string>
+    <string name="tab_terminal">Terminal</string>
 
     <!-- Tab stub placeholders -->
     <string name="stub_approvals_body">Pending approval gates will appear here.</string>
     <string name="stub_tasks_body">Scheduled tasks from Agent Zero will appear here.</string>
+
+    <!-- Terminal — SSH setup -->
+    <string name="terminal_setup_header">SSH key setup</string>
+    <string name="terminal_setup_body">Install this device\'s public key on a0prod to enable the shell. Two ways: copy the key itself and append it manually, or copy the one-shot install command below and paste it into an a0prod SSH session.</string>
+    <string name="terminal_setup_generating">Generating keypair in Keystore\u2026</string>
+    <string name="terminal_setup_copy_key">Copy public key</string>
+    <string name="terminal_setup_copy_command">Copy install command</string>
+    <string name="terminal_setup_command_header">One-shot install command</string>
 
     <!-- Chat -->
     <string name="chat_empty_title">Start a conversation</string>
