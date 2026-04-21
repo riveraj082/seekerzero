@@ -1,31 +1,43 @@
 package dev.seekerzero.app.ui.main
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Done
-import androidx.compose.material3.DrawerValue
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -41,6 +53,7 @@ import dev.seekerzero.app.ui.approvals.ApprovalsScreen
 import dev.seekerzero.app.ui.chat.ChatDrawerContent
 import dev.seekerzero.app.ui.chat.ChatScreen
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.terminal.TerminalScreen
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import kotlinx.coroutines.launch
 
@@ -55,7 +68,8 @@ private const val ROUTE_CHAT = "chat"
 private val TABS = listOf(
     TabDef(ROUTE_CHAT, R.string.tab_chat, Icons.AutoMirrored.Outlined.Chat),
     TabDef("approvals", R.string.tab_approvals, Icons.Outlined.Done),
-    TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment)
+    TabDef("tasks", R.string.tab_tasks, Icons.AutoMirrored.Outlined.Assignment),
+    TabDef("terminal", R.string.tab_terminal, Icons.Outlined.Terminal)
 )
 
 @Composable
@@ -70,17 +84,20 @@ fun MainScaffold() {
         SeekerZeroService.start(context)
     }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    // Custom drawer state. Plain boolean — drawer opens only via the
+    // hamburger callback (programmatic), closes on scrim tap / back
+    // gesture / row select / delete. No gesture-based open at all, no
+    // gesture competition with row buttons.
+    var drawerOpen by remember { mutableStateOf(false) }
     val isChatTab = currentRoute == ROUTE_CHAT
 
-    // Close the drawer whenever we leave the Chat tab, so switching to
-    // Approvals/Tasks while the drawer is open dismisses it cleanly.
+    // Close the drawer whenever we leave the Chat tab.
     LaunchedEffect(isChatTab) {
-        if (!isChatTab && drawerState.isOpen) drawerState.close()
+        if (!isChatTab && drawerOpen) drawerOpen = false
     }
 
-    // Drawer state is read directly from the singletons the data layer
-    // already owns; no VM plumbing needed at MainScaffold level.
+    // Drawer state from the data-layer singletons; no VM plumbing at this
+    // level.
     val repo = remember { ChatRepository.get(context.applicationContext) }
     val contexts by repo.remoteContexts.collectAsStateWithLifecycle()
     val activeContextId by ConfigManager.activeChatContextFlow.collectAsStateWithLifecycle()
@@ -89,15 +106,12 @@ fun MainScaffold() {
     // Refresh contexts whenever the drawer opens so A0's auto-rename of new
     // chats (which runs in an async background task during the first turn)
     // is visible next time the user looks at the list.
-    LaunchedEffect(drawerState.currentValue) {
-        if (drawerState.currentValue == DrawerValue.Open) {
-            repo.refreshContexts()
-        }
+    LaunchedEffect(drawerOpen) {
+        if (drawerOpen) repo.refreshContexts()
     }
 
-    // Also refresh right after a reply lands, since A0 finishes the
-    // rename around the same time. Catches the common case of "send first
-    // message on a new chat, wait for reply, reopen drawer".
+    // Also refresh right after a reply lands, since A0 finishes the rename
+    // around the same time.
     LaunchedEffect(streaming) {
         if (!streaming) {
             kotlinx.coroutines.delay(1500)
@@ -105,44 +119,10 @@ fun MainScaffold() {
         }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = isChatTab,
-        drawerContent = {
-            if (isChatTab) {
-                ChatDrawerContent(
-                    contexts = contexts,
-                    activeContextId = activeContextId,
-                    onSelect = { id ->
-                        ConfigManager.activeChatContext = id
-                        scope.launch { drawerState.close() }
-                    },
-                    onCreate = {
-                        scope.launch {
-                            repo.createContext().onSuccess { newId ->
-                                ConfigManager.activeChatContext = newId
-                            }
-                            drawerState.close()
-                        }
-                    },
-                    onDelete = { id ->
-                        scope.launch {
-                            val wasActive = id == activeContextId
-                            repo.deleteContext(id).onSuccess {
-                                if (wasActive) {
-                                    val fallback = repo.remoteContexts.value
-                                        .firstOrNull()?.id
-                                        ?: ChatRepository.DEFAULT_CONTEXT
-                                    ConfigManager.activeChatContext = fallback
-                                }
-                            }
-                        }
-                    },
-                    onRefresh = { scope.launch { repo.refreshContexts() } }
-                )
-            }
-        }
-    ) {
+    // System back gesture closes the drawer.
+    BackHandler(enabled = drawerOpen) { drawerOpen = false }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = SeekerZeroColors.Background,
             bottomBar = {
@@ -154,6 +134,7 @@ fun MainScaffold() {
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
+                                drawerOpen = false
                                 navController.navigate(tab.route) {
                                     popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                     launchSingleTop = true
@@ -182,12 +163,105 @@ fun MainScaffold() {
             ) {
                 NavHost(navController = navController, startDestination = ROUTE_CHAT) {
                     composable(ROUTE_CHAT) {
-                        ChatScreen(onMenu = { scope.launch { drawerState.open() } })
+                        ChatScreen(onMenu = { drawerOpen = true })
                     }
                     composable("approvals") { ApprovalsScreen() }
                     composable("tasks") { TasksScreenStub() }
+                    composable("terminal") { TerminalScreen() }
                 }
             }
+        }
+
+        // Custom drawer overlay. Animates in/out; tapping the scrim closes.
+        CustomChatDrawer(
+            open = drawerOpen && isChatTab,
+            onDismiss = { drawerOpen = false }
+        ) {
+            ChatDrawerContent(
+                contexts = contexts,
+                activeContextId = activeContextId,
+                onSelect = { id ->
+                    ConfigManager.activeChatContext = id
+                    drawerOpen = false
+                },
+                onCreate = {
+                    scope.launch {
+                        repo.createContext().onSuccess { newId ->
+                            ConfigManager.activeChatContext = newId
+                        }
+                        drawerOpen = false
+                    }
+                },
+                onDelete = { id ->
+                    scope.launch {
+                        val wasActive = id == activeContextId
+                        repo.deleteContext(id).onSuccess {
+                            if (wasActive) {
+                                val fallback = repo.remoteContexts.value
+                                    .firstOrNull()?.id
+                                    ?: ChatRepository.DEFAULT_CONTEXT
+                                ConfigManager.activeChatContext = fallback
+                            }
+                        }
+                    }
+                },
+                onRefresh = { scope.launch { repo.refreshContexts() } }
+            )
+        }
+    }
+}
+
+/**
+ * Minimal drawer overlay: scrim + sliding sheet, both animated by
+ * `animateFloatAsState`. No gesture handling — the only way to open is
+ * via the `open=true` parameter, and the only way to close is via the
+ * scrim's click handler or external state change (BackHandler, row
+ * select, etc.). This avoids all of Material 3 ModalNavigationDrawer's
+ * gesture-ambiguity problems (accidental swipe-open on Chat tab, drag-
+ * close eating button taps in the drawer body).
+ */
+@Composable
+private fun CustomChatDrawer(
+    open: Boolean,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val sheetWidth = 300.dp
+    val density = LocalDensity.current
+    val sheetWidthPx = with(density) { sheetWidth.toPx() }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = if (open) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "drawerProgress"
+    )
+
+    if (animatedProgress <= 0f) return
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Scrim
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.4f * animatedProgress))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                )
+        )
+        // Sheet, translated by (1 - progress) * width so it slides in from the left
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .width(sheetWidth)
+                .graphicsLayer {
+                    translationX = -sheetWidthPx * (1f - animatedProgress)
+                }
+                .background(SeekerZeroColors.Surface)
+        ) {
+            content()
         }
     }
 }

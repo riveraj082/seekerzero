@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,7 +19,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,41 +48,44 @@ fun ChatDrawerContent(
 ) {
     LaunchedEffect(Unit) { onRefresh() }
 
-    ModalDrawerSheet(
-        modifier = Modifier.width(300.dp).fillMaxHeight(),
-        drawerContainerColor = SeekerZeroColors.Surface
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(SeekerZeroColors.Surface)
+            .padding(top = statusBarPadding.calculateTopPadding())
+            .padding(vertical = 12.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Chats",
-                    color = SeekerZeroColors.TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Chats",
+                color = SeekerZeroColors.TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onCreate) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = "New chat",
+                    tint = SeekerZeroColors.Primary
                 )
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onCreate) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = "New chat",
-                        tint = SeekerZeroColors.Primary
-                    )
-                }
             }
-            LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                items(contexts, key = { it.id }) { ctx ->
-                    ContextRow(
-                        context = ctx,
-                        isActive = ctx.id == activeContextId,
-                        onSelect = { onSelect(ctx.id) },
-                        onDelete = { onDelete(ctx.id) }
-                    )
-                }
+        }
+        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+            items(contexts, key = { it.id }) { ctx ->
+                ContextRow(
+                    context = ctx,
+                    isActive = ctx.id == activeContextId,
+                    onSelect = { onSelect(ctx.id) },
+                    onDelete = { onDelete(ctx.id) }
+                )
             }
         }
     }
