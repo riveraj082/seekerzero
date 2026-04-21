@@ -8,11 +8,13 @@
 # Canonical source lives at /a0/usr/patches/seekerzero_mobile_api.py and is
 # copied into /a0/python/api/ by agent-zero-post-start.sh.
 
+import asyncio
 import json
 import queue
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -687,6 +689,250 @@ def _chat_stream_view():
     )
 
 
+# ---- Tasks (Phase 7) ----------------------------------------------------
+
+_TASK_LAST_RESULT_PREVIEW_CHARS = 500
+
+
+def _run_coro(coro):
+    """Run an async coroutine from a sync Flask handler. asyncio.run
+    creates a fresh event loop per call; Flask's sync request threads
+    don't have an existing loop so this is safe."""
+    return asyncio.run(coro)
+
+
+def _dt_to_ms(dt) -> int:
+    if dt is None:
+        return 0
+    if isinstance(dt, datetime):
+        return int(dt.timestamp() * 1000)
+    return 0
+
+
+def _task_to_dict(task) -> Dict[str, Any]:
+    state_val = task.state.value if hasattr(task.state, 'value') else str(task.state)
+    type_val = task.type.value if hasattr(task.type, 'value') else str(task.type)
+    schedule_dict: Optional[Dict[str, Any]] = None
+    schedule_obj = getattr(task, 'schedule', None)
+    if schedule_obj is not None:
+        schedule_dict = {
+            'minute': schedule_obj.minute,
+            'hour': schedule_obj.hour,
+            'day': schedule_obj.day,
+            'month': schedule_obj.month,
+            'weekday': schedule_obj.weekday,
+            'timezone': getattr(schedule_obj, 'timezone', '') or '',
+        }
+    next_run = None
+    try:
+        next_run = task.get_next_run()
+    except Exception:
+        pass
+    last_result = (getattr(task, 'last_result', '') or '')
+    return {
+        'uuid': task.uuid,
+        'name': task.name,
+        'state': state_val,
+        'type': type_val,
+        'schedule': schedule_dict,
+        'last_run_ms': _dt_to_ms(getattr(task, 'last_run', None)),
+        'next_run_ms': _dt_to_ms(next_run),
+        'last_result_preview': last_result[:_TASK_LAST_RESULT_PREVIEW_CHARS],
+        'last_result_truncated': len(last_result) > _TASK_LAST_RESULT_PREVIEW_CHARS,
+        'created_at_ms': _dt_to_ms(getattr(task, 'created_at', None)),
+        'updated_at_ms': _dt_to_ms(getattr(task, 'updated_at', None)),
+    }
+
+
+def _tasks_list_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from python.helpers.task_scheduler import TaskScheduler, TaskType
+    scheduler = TaskScheduler.get()
+    tasks = scheduler.get_tasks()
+    scheduled = [t for t in tasks if getattr(t, 'type', None) == TaskType.SCHEDULED]
+    body = {
+        'tasks': [_task_to_dict(t) for t in scheduled],
+        'server_time_ms': int(time.time() * 1000),
+    }
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
+def _task_detail_view(task_uuid: str):
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from python.helpers.task_scheduler import TaskScheduler
+    task = TaskScheduler.get().get_task_by_uuid(task_uuid)
+    if task is None:
+        return Response(
+            json.dumps({'ok': False, 'error': 'task not found', 'uuid': task_uuid}),
+            status=404,
+            mimetype='application/json',
+        )
+    body = _task_to_dict(task)
+    body['last_result_full'] = getattr(task, 'last_result', '') or ''
+    body['prompt'] = getattr(task, 'prompt', '') or ''
+    body['system_prompt'] = getattr(task, 'system_prompt', '') or ''
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
+def _task_create_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    try:
+        payload = flask_request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return _bad_request('body must be JSON')
+
+    name = (payload.get('name') or '').strip()
+    prompt = (payload.get('prompt') or '').strip()
+    system_prompt = (payload.get('system_prompt') or '').strip()
+    sched_dict = payload.get('schedule') or {}
+
+    if not name:
+        return _bad_request('name required')
+    if not prompt:
+        return _bad_request('prompt required')
+    if not isinstance(sched_dict, dict):
+        return _bad_request('schedule must be an object')
+
+    from python.helpers.task_scheduler import TaskSchedule, ScheduledTask, TaskScheduler
+
+    try:
+        schedule = TaskSchedule(
+            minute=str(sched_dict.get('minute', '*')),
+            hour=str(sched_dict.get('hour', '*')),
+            day=str(sched_dict.get('day', '*')),
+            month=str(sched_dict.get('month', '*')),
+            weekday=str(sched_dict.get('weekday', '*')),
+            timezone=str(sched_dict.get('timezone') or ''),
+        )
+    except Exception as e:
+        return _bad_request(f'invalid schedule: {e}')
+
+    task = ScheduledTask.create(
+        name=name,
+        system_prompt=system_prompt,
+        prompt=prompt,
+        schedule=schedule,
+    )
+
+    try:
+        _run_coro(TaskScheduler.get().add_task(task))
+    except Exception as e:
+        return Response(
+            json.dumps({'ok': False, 'error': f'add_task failed: {e!s}'}),
+            status=500,
+            mimetype='application/json',
+        )
+
+    return Response(
+        json.dumps({'ok': True, 'uuid': task.uuid, 'task': _task_to_dict(task)}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
+def _task_run_view(task_uuid: str):
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from python.helpers.task_scheduler import TaskScheduler
+    scheduler = TaskScheduler.get()
+    task = scheduler.get_task_by_uuid(task_uuid)
+    if task is None:
+        return Response(
+            json.dumps({'ok': False, 'error': 'task not found', 'uuid': task_uuid}),
+            status=404,
+            mimetype='application/json',
+        )
+
+    # Kick off in a background thread so the POST returns immediately.
+    def _fire():
+        try:
+            asyncio.run(scheduler.run_task_by_uuid(task_uuid))
+        except Exception as e:
+            # Scheduler logs its own errors; we just don't want to crash
+            # the thread.
+            pass
+
+    threading.Thread(target=_fire, daemon=True, name=f'task-run-{task_uuid}').start()
+
+    return Response(
+        json.dumps({'ok': True, 'uuid': task_uuid, 'started_at_ms': int(time.time() * 1000)}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
+def _task_set_state_view(task_uuid: str, enabled: bool) -> Response:
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from python.helpers.task_scheduler import TaskScheduler, TaskState
+    scheduler = TaskScheduler.get()
+    task = scheduler.get_task_by_uuid(task_uuid)
+    if task is None:
+        return Response(
+            json.dumps({'ok': False, 'error': 'task not found', 'uuid': task_uuid}),
+            status=404,
+            mimetype='application/json',
+        )
+    new_state = TaskState.IDLE if enabled else TaskState.DISABLED
+    try:
+        _run_coro(scheduler.update_task(task_uuid, state=new_state))
+    except Exception as e:
+        return Response(
+            json.dumps({'ok': False, 'error': f'update failed: {e!s}'}),
+            status=500,
+            mimetype='application/json',
+        )
+    return Response(
+        json.dumps({'ok': True, 'uuid': task_uuid, 'state': new_state.value}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
+def _task_enable_view(task_uuid: str):
+    return _task_set_state_view(task_uuid, enabled=True)
+
+
+def _task_disable_view(task_uuid: str):
+    return _task_set_state_view(task_uuid, enabled=False)
+
+
+def _task_delete_view(task_uuid: str):
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    from python.helpers.task_scheduler import TaskScheduler
+    scheduler = TaskScheduler.get()
+    task = scheduler.get_task_by_uuid(task_uuid)
+    if task is None:
+        return Response(
+            json.dumps({'ok': False, 'error': 'task not found', 'uuid': task_uuid}),
+            status=404,
+            mimetype='application/json',
+        )
+    try:
+        _run_coro(scheduler.remove_task_by_uuid(task_uuid))
+    except Exception as e:
+        return Response(
+            json.dumps({'ok': False, 'error': f'remove failed: {e!s}'}),
+            status=500,
+            mimetype='application/json',
+        )
+    return Response(
+        json.dumps({'ok': True, 'uuid': task_uuid}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
 class SeekerzeroMobileApi(ApiHandler):
     '''Bootstrap handler. Loader instantiates us once at startup; we register
     /mobile/* routes via side-effect in __init__.'''
@@ -761,6 +1007,48 @@ class SeekerzeroMobileApi(ApiHandler):
                 'seekerzero_mobile_chat_stream',
                 _chat_stream_view,
                 methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/scheduled',
+                'seekerzero_mobile_tasks_list',
+                _tasks_list_view,
+                methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks',
+                'seekerzero_mobile_tasks_create',
+                _task_create_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/<task_uuid>',
+                'seekerzero_mobile_task_detail',
+                _task_detail_view,
+                methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/<task_uuid>/run',
+                'seekerzero_mobile_task_run',
+                _task_run_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/<task_uuid>/enable',
+                'seekerzero_mobile_task_enable',
+                _task_enable_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/<task_uuid>/disable',
+                'seekerzero_mobile_task_disable',
+                _task_disable_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/tasks/<task_uuid>',
+                'seekerzero_mobile_task_delete',
+                _task_delete_view,
+                methods=['DELETE'],
             )
             SeekerzeroMobileApi._registered = True
 

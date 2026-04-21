@@ -53,6 +53,8 @@ import dev.seekerzero.app.ui.approvals.ApprovalsScreen
 import dev.seekerzero.app.ui.chat.ChatDrawerContent
 import dev.seekerzero.app.ui.chat.ChatScreen
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.tasks.TaskComposerScreen
+import dev.seekerzero.app.ui.tasks.TasksScreen
 import dev.seekerzero.app.ui.terminal.TerminalScreen
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import kotlinx.coroutines.launch
@@ -166,7 +168,12 @@ fun MainScaffold() {
                         ChatScreen(onMenu = { drawerOpen = true })
                     }
                     composable("approvals") { ApprovalsScreen() }
-                    composable("tasks") { TasksScreenStub() }
+                    composable("tasks") {
+                        TasksScreen(onCompose = { navController.navigate("tasks/new") })
+                    }
+                    composable("tasks/new") {
+                        TaskComposerScreen(onBack = { navController.popBackStack() })
+                    }
                     composable("terminal") { TerminalScreen() }
                 }
             }
@@ -267,20 +274,3 @@ private fun CustomChatDrawer(
 }
 
 
-@Composable
-private fun TasksScreenStub() = TabStub(
-    title = stringResource(R.string.tab_tasks),
-    body = stringResource(R.string.stub_tasks_body)
-)
-
-@Composable
-private fun TabStub(title: String, body: String) {
-    SeekerZeroScaffold(title = title) { pad ->
-        Box(
-            modifier = Modifier.fillMaxSize().padding(pad),
-            contentAlignment = androidx.compose.ui.Alignment.Center
-        ) {
-            Text(body, color = SeekerZeroColors.TextSecondary)
-        }
-    }
-}

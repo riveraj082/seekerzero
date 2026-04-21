@@ -8,6 +8,10 @@ import dev.seekerzero.app.api.models.ChatHistoryResponse
 import dev.seekerzero.app.api.models.ChatSendRequest
 import dev.seekerzero.app.api.models.ChatSendResponse
 import dev.seekerzero.app.api.models.HealthResponse
+import dev.seekerzero.app.api.models.TaskActionResponse
+import dev.seekerzero.app.api.models.TaskCreateRequest
+import dev.seekerzero.app.api.models.TaskCreateResponse
+import dev.seekerzero.app.api.models.TasksListResponse
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.LogCollector
 import kotlinx.coroutines.Dispatchers
@@ -117,6 +121,61 @@ object MobileApiClient {
         )
         json.decodeFromString(dev.seekerzero.app.api.models.ChatContextCreateResponse.serializer(), body)
     }.onFailure { LogCollector.w(TAG, "chatContextCreate() failed: ${it.message}") }
+
+    suspend fun tasksScheduled(): Result<TasksListResponse> = runCatching {
+        val url = buildUrl("/tasks/scheduled")
+        LogCollector.d(TAG, "GET $url")
+        val body = execute(client, Request.Builder().url(url).get().build())
+        json.decodeFromString(TasksListResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "tasksScheduled() failed: ${it.message}") }
+
+    suspend fun taskCreate(request: TaskCreateRequest): Result<TaskCreateResponse> = runCatching {
+        val url = buildUrl("/tasks")
+        val bodyJson = json.encodeToString(TaskCreateRequest.serializer(), request)
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post(bodyJson.toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(TaskCreateResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "taskCreate() failed: ${it.message}") }
+
+    suspend fun taskRun(uuid: String): Result<TaskActionResponse> = runCatching {
+        val url = buildUrl("/tasks/$uuid/run")
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post("".toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(TaskActionResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "taskRun($uuid) failed: ${it.message}") }
+
+    suspend fun taskEnable(uuid: String): Result<TaskActionResponse> = runCatching {
+        val url = buildUrl("/tasks/$uuid/enable")
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post("".toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(TaskActionResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "taskEnable($uuid) failed: ${it.message}") }
+
+    suspend fun taskDisable(uuid: String): Result<TaskActionResponse> = runCatching {
+        val url = buildUrl("/tasks/$uuid/disable")
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post("".toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(TaskActionResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "taskDisable($uuid) failed: ${it.message}") }
+
+    suspend fun taskDelete(uuid: String): Result<Unit> = runCatching {
+        val url = buildUrl("/tasks/$uuid")
+        LogCollector.d(TAG, "DELETE $url")
+        execute(client, Request.Builder().url(url).delete().build())
+        Unit
+    }.onFailure { LogCollector.w(TAG, "taskDelete($uuid) failed: ${it.message}") }
 
     suspend fun chatContextDelete(contextId: String): Result<Unit> = runCatching {
         val url = buildUrl("/chat/contexts/$contextId")

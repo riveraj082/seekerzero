@@ -2,6 +2,7 @@ package dev.seekerzero.app.ui.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Menu
@@ -22,7 +23,8 @@ import dev.seekerzero.app.ui.theme.SeekerZeroTheme
 fun SeekerZeroTopAppBar(
     title: String,
     onBack: (() -> Unit)? = null,
-    onMenu: (() -> Unit)? = null
+    onMenu: (() -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {}
 ) {
     TopAppBar(
         title = { Text(title, color = SeekerZeroColors.TextPrimary) },
@@ -44,10 +46,12 @@ fun SeekerZeroTopAppBar(
                 }
             }
         },
+        actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = SeekerZeroColors.Background,
             titleContentColor = SeekerZeroColors.TextPrimary,
-            navigationIconContentColor = SeekerZeroColors.TextPrimary
+            navigationIconContentColor = SeekerZeroColors.TextPrimary,
+            actionIconContentColor = SeekerZeroColors.TextPrimary
         )
     )
 }

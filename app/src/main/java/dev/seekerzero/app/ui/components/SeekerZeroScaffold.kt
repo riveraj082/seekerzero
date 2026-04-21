@@ -19,10 +19,18 @@ fun SeekerZeroScaffold(
     title: String,
     onBack: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
-        topBar = { SeekerZeroTopAppBar(title = title, onBack = onBack, onMenu = onMenu) },
+        topBar = {
+            SeekerZeroTopAppBar(
+                title = title,
+                onBack = onBack,
+                onMenu = onMenu,
+                actions = actions
+            )
+        },
         containerColor = SeekerZeroColors.Background
     ) { inner ->
         Box(
