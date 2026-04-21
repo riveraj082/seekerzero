@@ -4,15 +4,18 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import dev.seekerzero.app.ssh.KnownHostDao
+import dev.seekerzero.app.ssh.KnownHostEntity
 
 @Database(
-    entities = [ChatMessageEntity::class],
-    version = 1,
+    entities = [ChatMessageEntity::class, KnownHostEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
 
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun knownHostDao(): KnownHostDao
 
     companion object {
         private const val NAME = "chat.db"

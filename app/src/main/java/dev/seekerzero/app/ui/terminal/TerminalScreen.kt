@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,20 +49,49 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.fragment.app.FragmentActivity
 import dev.seekerzero.app.R
+import dev.seekerzero.app.ssh.BiometricGate
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun TerminalScreen(viewModel: TerminalViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val scrollback by viewModel.scrollback.collectAsStateWithLifecycle()
     val publicKey by viewModel.publicKey.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val launchBiometric: () -> Unit = remember(context) {
+        lambda@{
+            val activity = context as? FragmentActivity ?: return@lambda
+            scope.launch {
+                when (val res = BiometricGate.authenticate(activity)) {
+                    BiometricGate.Result.Success -> viewModel.onBiometricUnlocked()
+                    BiometricGate.Result.Cancelled -> viewModel.onBiometricCancelled()
+                    BiometricGate.Result.Unavailable -> {
+                        // No biometric enrolled and no device credential set up.
+                        // Treat as unlocked — better than leaving a dead tab.
+                        viewModel.onBiometricUnlocked()
+                    }
+                    is BiometricGate.Result.Error -> viewModel.onBiometricCancelled()
+                }
+            }
+        }
+    }
+
+    // Auto-prompt on tab entry when locked.
+    LaunchedEffect(state) {
+        if (state is TerminalState.Locked) launchBiometric()
+    }
 
     SeekerZeroScaffold(title = stringResource(R.string.tab_terminal)) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
-            when (state) {
+            when (val s = state) {
+                is TerminalState.Locked -> LockedView(onUnlock = launchBiometric)
                 is TerminalState.Connected -> ConnectedView(
                     scrollback = scrollback,
                     onSend = { viewModel.sendLine(it) },
@@ -71,12 +101,17 @@ fun TerminalScreen(viewModel: TerminalViewModel = viewModel()) {
                 is TerminalState.Connecting -> CenteredText("Connecting to a0prod\u2026")
                 is TerminalState.AuthFailed -> SetupView(
                     publicKey = publicKey,
-                    hint = "Auth failed: ${(state as TerminalState.AuthFailed).message}. Install the key on a0prod and retry.",
+                    hint = "Auth failed: ${s.message}. Install the key on a0prod and retry.",
                     onRetry = { viewModel.tryConnect() }
                 )
                 is TerminalState.NetworkError -> SetupView(
                     publicKey = publicKey,
-                    hint = "Network error: ${(state as TerminalState.NetworkError).message}",
+                    hint = "Network error: ${s.message}",
+                    onRetry = { viewModel.tryConnect() }
+                )
+                is TerminalState.HostKeyMismatch -> SetupView(
+                    publicKey = publicKey,
+                    hint = "⚠ Host key mismatch: ${s.message}. The server's SSH key has changed since the last connection. Refusing to connect.",
                     onRetry = { viewModel.tryConnect() }
                 )
                 TerminalState.Idle -> SetupView(
@@ -85,6 +120,38 @@ fun TerminalScreen(viewModel: TerminalViewModel = viewModel()) {
                     onRetry = { viewModel.tryConnect() }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun LockedView(onUnlock: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Terminal locked",
+            color = SeekerZeroColors.TextPrimary,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Unlock with biometric or device credential to open an SSH session.",
+            color = SeekerZeroColors.TextSecondary,
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onUnlock,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = SeekerZeroColors.Primary,
+                contentColor = SeekerZeroColors.OnPrimary
+            )
+        ) {
+            Text("Unlock")
         }
     }
 }

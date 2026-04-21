@@ -74,7 +74,12 @@ object SshClient {
     val isConnected: Boolean get() = ssh?.isConnected == true && ssh?.isAuthenticated == true
     val hasShell: Boolean get() = shellCommand != null
 
-    suspend fun connect(host: String, port: Int = 22, user: String): Result<Unit> =
+    suspend fun connect(
+        host: String,
+        port: Int = 22,
+        user: String,
+        verifier: net.schmizz.sshj.transport.verification.HostKeyVerifier? = null
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 disconnectInternal()
@@ -93,7 +98,10 @@ object SshClient {
                 val client = SSHClient(cfg).apply {
                     connectTimeout = CONNECT_TIMEOUT_MS
                     timeout = CONNECT_TIMEOUT_MS
-                    addHostKeyVerifier(PromiscuousVerifier())
+                    // Caller provides a verifier (KnownHostsVerifier in 6d+);
+                    // PromiscuousVerifier fallback kept for tests where the
+                    // caller can't plumb a real verifier in.
+                    addHostKeyVerifier(verifier ?: PromiscuousVerifier())
                 }
                 LogCollector.d(TAG, "connecting to $user@$host:$port")
                 client.connect(host, port)
