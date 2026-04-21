@@ -10,6 +10,23 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.UUID
+
+/**
+ * An in-session record of one tool invocation during the active assistant
+ * turn. Not persisted: once the final event arrives or the turn is
+ * abandoned, the list is cleared. Shown inline under the in-flight
+ * assistant bubble as a compact timeline.
+ */
+data class ToolActivity(
+    val id: String,
+    val toolName: String,
+    val startedAtMs: Long,
+    val endedAtMs: Long? = null
+) {
+    val durationMs: Long? get() = endedAtMs?.let { it - startedAtMs }
+    val inFlight: Boolean get() = endedAtMs == null
+}
 
 /**
  * Data layer for chat. Owns the Room cache and the REST calls for send/history.
@@ -44,6 +61,9 @@ class ChatRepository private constructor(
 
     private val _activeTool = MutableStateFlow<String?>(null)
     val activeTool: StateFlow<String?> = _activeTool.asStateFlow()
+
+    private val _currentTurnTools = MutableStateFlow<List<ToolActivity>>(emptyList())
+    val currentTurnTools: StateFlow<List<ToolActivity>> = _currentTurnTools.asStateFlow()
 
     fun messages(contextId: String = DEFAULT_CONTEXT): Flow<List<ChatMessageEntity>> =
         dao.observe(contextId)
@@ -157,14 +177,34 @@ class ChatRepository private constructor(
                 )
                 dao.trim(contextId, CACHE_CAP_PER_CONTEXT)
                 _activeTool.value = null
+                _currentTurnTools.value = emptyList()
                 _streaming.value = false
             }
             "tool_call" -> {
                 val toolName = obj["tool_name"]?.jsonPrimitive?.content ?: return
+                val startedAt = obj["created_at_ms"]?.jsonPrimitive?.content?.toLongOrNull()
+                    ?: System.currentTimeMillis()
+                _currentTurnTools.value = _currentTurnTools.value + ToolActivity(
+                    id = UUID.randomUUID().toString(),
+                    toolName = toolName,
+                    startedAtMs = startedAt
+                )
                 _activeTool.value = toolName
                 _streaming.value = true
             }
             "tool_result" -> {
+                val toolName = obj["tool_name"]?.jsonPrimitive?.content
+                val endedAt = obj["created_at_ms"]?.jsonPrimitive?.content?.toLongOrNull()
+                    ?: System.currentTimeMillis()
+                val list = _currentTurnTools.value
+                val idx = list.indexOfLast {
+                    it.endedAtMs == null && (toolName == null || it.toolName == toolName)
+                }
+                if (idx >= 0) {
+                    _currentTurnTools.value = list.toMutableList().also {
+                        it[idx] = it[idx].copy(endedAtMs = endedAt)
+                    }
+                }
                 _activeTool.value = null
             }
         }
@@ -173,6 +213,7 @@ class ChatRepository private constructor(
     fun markStreamingIdle() {
         _streaming.value = false
         _activeTool.value = null
+        _currentTurnTools.value = emptyList()
     }
 
     private fun ChatMessageDto.toEntity(contextId: String) = ChatMessageEntity(

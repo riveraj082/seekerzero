@@ -52,6 +52,7 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
     val activeTool by viewModel.activeTool.collectAsStateWithLifecycle()
+    val turnTools by viewModel.currentTurnTools.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         viewModel.attach()
@@ -61,7 +62,8 @@ fun ChatScreen(
     val lastAssistantEmpty = messages.lastOrNull()?.let {
         it.role == ChatRole.ASSISTANT && it.content.isEmpty()
     } ?: false
-    val showActivityPill = streaming && (activeTool != null || lastAssistantEmpty)
+    val showTimeline = streaming && turnTools.isNotEmpty()
+    val showPill = streaming && !showTimeline && (activeTool != null || lastAssistantEmpty)
 
     SeekerZeroScaffold(title = stringResource(R.string.tab_chat)) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
@@ -72,8 +74,21 @@ fun ChatScreen(
                     MessageList(messages = messages)
                 }
             }
-            if (showActivityPill) {
-                ActivityPill(toolName = activeTool)
+            if (showTimeline || showPill) {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Text(
+                        text = "Agent Zero",
+                        color = SeekerZeroColors.TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
+                    )
+                    if (showTimeline) {
+                        ToolTimeline(tools = turnTools)
+                    } else {
+                        ActivityPill(toolName = activeTool)
+                    }
+                }
             }
             Composer(
                 enabled = !streaming,
@@ -84,12 +99,60 @@ fun ChatScreen(
 }
 
 @Composable
+private fun ToolTimeline(tools: List<dev.seekerzero.app.chat.ToolActivity>) {
+    CardSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            tools.forEachIndexed { index, t ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${index + 1}.",
+                        color = SeekerZeroColors.TextDisabled,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(
+                        text = t.toolName,
+                        color = SeekerZeroColors.TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(Modifier.weight(1f))
+                    val durLabel = when {
+                        t.inFlight -> "running…"
+                        t.durationMs != null -> formatDuration(t.durationMs!!)
+                        else -> ""
+                    }
+                    Text(
+                        text = durLabel,
+                        color = if (t.inFlight) SeekerZeroColors.Primary else SeekerZeroColors.TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    if (ms < 1000) return "${ms}ms"
+    val s = ms / 1000.0
+    return if (s < 10) "%.1fs".format(s) else "${s.toInt()}s"
+}
+
+@Composable
 private fun ActivityPill(toolName: String?) {
     val label = if (toolName != null) "Using $toolName…" else "Thinking…"
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start
     ) {

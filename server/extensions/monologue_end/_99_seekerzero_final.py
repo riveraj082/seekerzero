@@ -35,17 +35,32 @@ def _extract_final_text(agent) -> str:
     """Pull the final assistant text from the most recent response log item.
     The web UI's LiveResponse extension appends to a log item of type
     'response' on each parseable chunk; by monologue_end, its content is
-    the complete assistant reply."""
+    the complete assistant reply.
+
+    Defensively expands any surviving §§include(...) references. A0's
+    ReplaceIncludeAlias extension normally handles this at response_stream
+    time, but if a reference slipped through (e.g. the file was written
+    after that chunk was processed) the raw placeholder would otherwise
+    leak to the phone. Not a substitute for the upstream fix — just a
+    display safety net."""
     try:
         logs = agent.context.log.logs
         for item in reversed(logs):
             if getattr(item, 'type', None) == 'response':
                 content = getattr(item, 'content', '')
                 if isinstance(content, str) and content:
-                    return content
+                    return _safe_expand_includes(content)
     except Exception:
         pass
     return ''
+
+
+def _safe_expand_includes(text: str) -> str:
+    try:
+        from python.helpers.strings import replace_file_includes
+        return replace_file_includes(text)
+    except Exception:
+        return text
 
 
 def _append_mirror(context_id: str, record: dict) -> None:

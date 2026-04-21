@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.seekerzero.app.chat.ChatMessageEntity
 import dev.seekerzero.app.chat.ChatRepository
+import dev.seekerzero.app.chat.ToolActivity
 import dev.seekerzero.app.util.ServiceState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val streaming: StateFlow<Boolean> = repo.streaming
     val activeTool: StateFlow<String?> = repo.activeTool
+    val currentTurnTools: StateFlow<List<ToolActivity>> = repo.currentTurnTools
 
     fun attach() = ServiceState.setChatAttached(true)
     fun detach() = ServiceState.setChatAttached(false)
