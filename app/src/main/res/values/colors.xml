@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the dark-navy background baked into ic_launcher_foreground.png
+         so launcher masks crop to a visually consistent edge. -->
+    <color name="ic_launcher_background">#0A0A23</color>
+</resources>
