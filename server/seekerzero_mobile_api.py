@@ -36,6 +36,12 @@ _CHAT_HISTORY_MAX_LIMIT = 500
 _CHAT_STREAM_KEEPALIVE_S = 5.0
 _CHAT_STREAM_POLL_S = 0.25
 _CHAT_STREAM_MAX_SUBS_PER_CONTEXT = 1
+# Hard ceiling on how long a single /mobile/chat/stream generator holds a
+# Flask request thread. After this, we return cleanly; the client's
+# reconnect loop reopens with an updated since_ms and sees no gap.
+# Thread-starvation guard: keepalive/socket-close detection alone can miss
+# parked subscribers when the tailnet or phone radio pauses silently.
+_CHAT_STREAM_MAX_LIFETIME_S = 60.0
 
 _chat_log_lock = threading.Lock()
 
@@ -557,9 +563,14 @@ def _chat_stream_view():
             # 2) Drain live events from the queue. A short keepalive interval
             # (5s) means a disconnected client is noticed within one yield
             # attempt; the generator then unwinds via GeneratorExit and the
-            # finally clause releases the request thread.
-            last_event = time.monotonic()
+            # finally clause releases the request thread. Independently, a
+            # max-lifetime ceiling forces a clean return after 60s so a
+            # silently-paused client can't park the Flask thread indefinitely.
+            started = time.monotonic()
+            last_event = started
             while True:
+                if time.monotonic() - started >= _CHAT_STREAM_MAX_LIFETIME_S:
+                    return
                 try:
                     ev = q.get(timeout=_CHAT_STREAM_POLL_S)
                     # Poison pill from the subscribe-side evictor: stop cleanly.
