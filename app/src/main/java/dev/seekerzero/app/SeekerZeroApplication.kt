@@ -1,6 +1,7 @@
 package dev.seekerzero.app
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -24,12 +25,13 @@ class SeekerZeroApplication : Application() {
         val serviceChannel = NotificationChannel(
             CHANNEL_SERVICE,
             "Connection",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "Persistent notification while SeekerZero is connected to Agent Zero."
+            description = "Background connection to Agent Zero. Dismissable; service keeps running."
             setShowBadge(false)
             setSound(null, null)
             enableVibration(false)
+            lockscreenVisibility = Notification.VISIBILITY_SECRET
         }
 
         val approvalsChannel = NotificationChannel(

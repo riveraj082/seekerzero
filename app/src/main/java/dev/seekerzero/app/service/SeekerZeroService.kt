@@ -144,10 +144,12 @@ class SeekerZeroService : Service() {
             .setContentTitle("SeekerZero")
             .setContentText("Connected to Agent Zero")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setOngoing(true)
+            .setOngoing(false)
             .setSilent(true)
             .setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
             .build()
     }
