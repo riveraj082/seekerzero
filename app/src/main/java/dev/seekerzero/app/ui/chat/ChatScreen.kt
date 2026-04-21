@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,11 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
+
+    DisposableEffect(Unit) {
+        viewModel.attach()
+        onDispose { viewModel.detach() }
+    }
 
     SeekerZeroScaffold(title = stringResource(R.string.tab_chat)) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {

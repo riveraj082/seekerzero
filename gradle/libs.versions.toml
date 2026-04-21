@@ -10,6 +10,8 @@ camerax = "1.4.1"
 zxing-embedded = "4.3.0"
 kotlinx-serialization = "1.7.3"
 okhttp = "4.12.0"
+room = "2.6.1"
+ksp = "2.0.21-1.0.28"
 
 [libraries]
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
@@ -33,9 +35,13 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 androidx-browser = { group = "androidx.browser", name = "browser", version = "1.8.0" }
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxing-embedded" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

@@ -3,14 +3,24 @@ package dev.seekerzero.app.api
 import dev.seekerzero.app.api.models.ApprovalActionResponse
 import dev.seekerzero.app.api.models.ApprovalsPendingResponse
 import dev.seekerzero.app.api.models.ApprovalsStreamResponse
+import dev.seekerzero.app.api.models.ChatContextsResponse
+import dev.seekerzero.app.api.models.ChatHistoryResponse
+import dev.seekerzero.app.api.models.ChatSendRequest
+import dev.seekerzero.app.api.models.ChatSendResponse
 import dev.seekerzero.app.api.models.HealthResponse
 import dev.seekerzero.app.config.ConfigManager
 import dev.seekerzero.app.util.LogCollector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlin.coroutines.coroutineContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -38,7 +48,14 @@ object MobileApiClient {
             .build()
     }
 
+    private val chatStreamClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS) // no timeout: NDJSON is long-lived with 25s keepalives
+            .build()
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun health(): Result<HealthResponse> = runCatching {
         val url = buildUrl("/health")
@@ -83,6 +100,84 @@ object MobileApiClient {
         val body = execute(client, request)
         json.decodeFromString(ApprovalActionResponse.serializer(), body)
     }.onFailure { LogCollector.w(TAG, "approvals $verb $id failed: ${it.message}") }
+
+    suspend fun chatContexts(): Result<ChatContextsResponse> = runCatching {
+        val url = buildUrl("/chat/contexts")
+        LogCollector.d(TAG, "GET $url")
+        val body = execute(client, Request.Builder().url(url).get().build())
+        json.decodeFromString(ChatContextsResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "chatContexts() failed: ${it.message}") }
+
+    suspend fun chatHistory(
+        contextId: String,
+        beforeMs: Long? = null,
+        limit: Int = 50
+    ): Result<ChatHistoryResponse> = runCatching {
+        val base = buildUrl("/chat/history").toHttpUrl().newBuilder()
+            .addQueryParameter("context", contextId)
+            .addQueryParameter("limit", limit.toString())
+        if (beforeMs != null) base.addQueryParameter("before_ms", beforeMs.toString())
+        val url = base.build().toString()
+        LogCollector.d(TAG, "GET $url")
+        val body = execute(client, Request.Builder().url(url).get().build())
+        json.decodeFromString(ChatHistoryResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "chatHistory() failed: ${it.message}") }
+
+    suspend fun chatSend(contextId: String, content: String): Result<ChatSendResponse> = runCatching {
+        val url = buildUrl("/chat/send")
+        val bodyJson = json.encodeToString(
+            ChatSendRequest.serializer(),
+            ChatSendRequest(context = contextId, content = content)
+        )
+        LogCollector.d(TAG, "POST $url")
+        val body = execute(
+            client,
+            Request.Builder().url(url).post(bodyJson.toRequestBody(jsonMediaType)).build()
+        )
+        json.decodeFromString(ChatSendResponse.serializer(), body)
+    }.onFailure { LogCollector.w(TAG, "chatSend() failed: ${it.message}") }
+
+    /**
+     * Open the NDJSON chat stream. Suspends until the connection ends or the coroutine is
+     * cancelled. Runs on Dispatchers.IO; cancellation of the enclosing coroutine closes the
+     * underlying OkHttp call.
+     */
+    suspend fun chatStream(
+        contextId: String,
+        sinceMs: Long,
+        onEvent: suspend (JsonObject) -> Unit
+    ) {
+        val url = buildUrl("/chat/stream").toHttpUrl().newBuilder()
+            .addQueryParameter("context", contextId)
+            .addQueryParameter("since", sinceMs.toString())
+            .build()
+            .toString()
+        LogCollector.d(TAG, "GET $url (stream)")
+
+        val request = Request.Builder().url(url).get().build()
+        val call = chatStreamClient.newCall(request)
+
+        withContext(Dispatchers.IO) {
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IOException("HTTP ${response.code} on chat stream")
+                    }
+                    val source = response.body?.source()
+                        ?: throw IOException("empty stream body")
+                    while (coroutineContext.isActive && !call.isCanceled() && !source.exhausted()) {
+                        val line = source.readUtf8Line() ?: break
+                        if (line.isBlank()) continue
+                        val obj = runCatching { json.parseToJsonElement(line) }
+                            .getOrNull() as? JsonObject ?: continue
+                        onEvent(obj)
+                    }
+                }
+            } finally {
+                runCatching { call.cancel() }
+            }
+        }
+    }
 
     private fun buildUrl(pathSuffix: String): String {
         val rawHost = ConfigManager.a0Host
