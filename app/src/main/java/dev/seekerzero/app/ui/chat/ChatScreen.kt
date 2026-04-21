@@ -51,11 +51,17 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streaming by viewModel.streaming.collectAsStateWithLifecycle()
+    val activeTool by viewModel.activeTool.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         viewModel.attach()
         onDispose { viewModel.detach() }
     }
+
+    val lastAssistantEmpty = messages.lastOrNull()?.let {
+        it.role == ChatRole.ASSISTANT && it.content.isEmpty()
+    } ?: false
+    val showActivityPill = streaming && (activeTool != null || lastAssistantEmpty)
 
     SeekerZeroScaffold(title = stringResource(R.string.tab_chat)) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
@@ -66,6 +72,9 @@ fun ChatScreen(
                     MessageList(messages = messages)
                 }
             }
+            if (showActivityPill) {
+                ActivityPill(toolName = activeTool)
+            }
             Composer(
                 enabled = !streaming,
                 onSend = { viewModel.send(it) }
@@ -75,12 +84,44 @@ fun ChatScreen(
 }
 
 @Composable
+private fun ActivityPill(toolName: String?) {
+    val label = if (toolName != null) "Using $toolName…" else "Thinking…"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(SeekerZeroColors.SurfaceVariant)
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = label,
+                color = SeekerZeroColors.TextSecondary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
 private fun MessageList(messages: List<ChatMessage>) {
+    // Hide empty in-flight assistant bubbles. The activity pill below the
+    // list is already the activity indicator; showing an empty bubble with
+    // "..." inside is redundant. Bubble reappears as soon as deltas land.
+    val visible = messages.filterNot {
+        it.role == ChatRole.ASSISTANT && !it.isFinal && it.content.isEmpty()
+    }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.size, messages.lastOrNull()?.content) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+    LaunchedEffect(visible.size, visible.lastOrNull()?.content) {
+        if (visible.isNotEmpty()) {
+            listState.animateScrollToItem(visible.lastIndex)
         }
     }
 
@@ -90,7 +131,7 @@ private fun MessageList(messages: List<ChatMessage>) {
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items(messages, key = { it.id }) { message ->
+        items(visible, key = { it.id }) { message ->
             MessageBubble(message = message)
         }
     }

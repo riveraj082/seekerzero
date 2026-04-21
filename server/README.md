@@ -26,6 +26,13 @@ start.
   text from the context log, writes a row to the JSONL mirror
   (`/a0/usr/seekerzero/chat/mobile-seekerzero.jsonl`, used by
   `/chat/history`), publishes a `final` event, and clears the busy flag.
+- `extensions/tool_execute_before/_99_seekerzero_tool_start.py` +
+  `extensions/tool_execute_after/_99_seekerzero_tool_end.py` — hook the
+  tool-execution boundary. For top-level mobile-seekerzero turns, emit
+  `tool_call` before a tool runs and `tool_result` after it returns
+  (skipping `response`, which is the final-reply signal, not a tool).
+  The phone uses these to render a "Using `<tool_name>`…" pill while
+  mid-turn tool activity is happening.
 - Shared state (subscribers, turn-state, busy flag) lives on
   `AgentContext.data['_seekerzero_chat_bus']`. This is load-bearing:
   handler + extensions are both loaded via `extract_tools.import_module`
@@ -95,7 +102,11 @@ NDJSON events emitted on `/mobile/chat/stream`:
 // Final message — full assembled assistant reply, persisted to the log.
 {"type":"final","message_id":"msg-a-…","role":"assistant","content":"…","created_at_ms":1713620005123}
 
-// Idle keepalive every ~25s. No message_id; client ignores.
+// Mid-turn tool invocation (Step 4b). Clients can render a "Using <tool>…" pill.
+{"type":"tool_call","message_id":"msg-a-…","tool_name":"call_subordinate","tool_args":{…},"created_at_ms":1713620002000}
+{"type":"tool_result","message_id":"msg-a-…","tool_name":"call_subordinate","result_preview":"…","truncated":false,"created_at_ms":1713620003500}
+
+// Idle keepalive every ~5s. No message_id; client ignores.
 {"type":"keepalive","created_at_ms":1713620025000}
 ```
 

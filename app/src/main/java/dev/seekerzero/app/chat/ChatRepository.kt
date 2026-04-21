@@ -42,6 +42,9 @@ class ChatRepository private constructor(
     private val _streaming = MutableStateFlow(false)
     val streaming: StateFlow<Boolean> = _streaming.asStateFlow()
 
+    private val _activeTool = MutableStateFlow<String?>(null)
+    val activeTool: StateFlow<String?> = _activeTool.asStateFlow()
+
     fun messages(contextId: String = DEFAULT_CONTEXT): Flow<List<ChatMessageEntity>> =
         dao.observe(contextId)
 
@@ -153,13 +156,23 @@ class ChatRepository private constructor(
                     )
                 )
                 dao.trim(contextId, CACHE_CAP_PER_CONTEXT)
+                _activeTool.value = null
                 _streaming.value = false
+            }
+            "tool_call" -> {
+                val toolName = obj["tool_name"]?.jsonPrimitive?.content ?: return
+                _activeTool.value = toolName
+                _streaming.value = true
+            }
+            "tool_result" -> {
+                _activeTool.value = null
             }
         }
     }
 
     fun markStreamingIdle() {
         _streaming.value = false
+        _activeTool.value = null
     }
 
     private fun ChatMessageDto.toEntity(contextId: String) = ChatMessageEntity(

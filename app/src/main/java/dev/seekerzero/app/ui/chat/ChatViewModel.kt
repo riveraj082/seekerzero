@@ -22,6 +22,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val streaming: StateFlow<Boolean> = repo.streaming
+    val activeTool: StateFlow<String?> = repo.activeTool
 
     fun attach() = ServiceState.setChatAttached(true)
     fun detach() = ServiceState.setChatAttached(false)
