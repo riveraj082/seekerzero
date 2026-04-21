@@ -91,5 +91,14 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    implementation(libs.sshj) {
+        // sshj pulls in slf4j-api; we provide slf4j-nop to silence its logs
+        // instead of adding a full logging backend.
+        exclude(group = "org.slf4j", module = "slf4j-jdk14")
+    }
+    implementation(libs.bouncycastle.bcprov)
+    implementation(libs.bouncycastle.bcpkix)
+    implementation(libs.eddsa)
+    implementation(libs.slf4j.simple)
     debugImplementation(libs.androidx.ui.tooling)
 }

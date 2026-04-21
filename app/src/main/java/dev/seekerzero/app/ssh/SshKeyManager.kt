@@ -53,13 +53,92 @@ object SshKeyManager {
 
     fun hasKey(): Boolean = loadKeyPair() != null
 
+    /**
+     * Raw 32-byte Ed25519 public key. Used to construct a wire-compatible
+     * sshj public-key wrapper that sshj's KeyType.ED25519 can serialize.
+     */
+    fun getRawEd25519PublicKey(): ByteArray {
+        val kp = getOrCreateKeyPair()
+        return extractEd25519RawPublicKey(kp.public)
+    }
+
+    /**
+     * Diagnostic: sign 32 arbitrary bytes with the Keystore-backed
+     * Ed25519 key and report timing / success. Used to confirm whether
+     * signing itself is hanging in Keystore (suspected on MediaTek
+     * TrustZone implementations with incomplete Ed25519 support).
+     * Logs to LogCollector so the result shows up in `adb logcat -s SshKeyManager:*`.
+     */
+    fun selfTestSign(): String {
+        val kp = try {
+            getOrCreateKeyPair()
+        } catch (t: Throwable) {
+            val msg = "FAIL (getOrCreateKeyPair): ${t.javaClass.simpleName}: ${t.message}"
+            LogCollector.w(TAG, "selfTestSign $msg")
+            return msg
+        }
+
+        val data = ByteArray(32).also { for (i in it.indices) it[i] = (i and 0xff).toByte() }
+
+        val t0 = System.nanoTime()
+        val sig = try {
+            java.security.Signature.getInstance("Ed25519")
+        } catch (t: Throwable) {
+            val msg = "FAIL (getInstance Ed25519): ${t.javaClass.simpleName}: ${t.message}"
+            LogCollector.w(TAG, "selfTestSign $msg")
+            return msg
+        }
+        val t1 = System.nanoTime()
+
+        try {
+            sig.initSign(kp.private)
+        } catch (t: Throwable) {
+            val msg = "FAIL (initSign): ${t.javaClass.simpleName}: ${t.message}"
+            LogCollector.w(TAG, "selfTestSign $msg")
+            return msg
+        }
+        val t2 = System.nanoTime()
+
+        try {
+            sig.update(data)
+        } catch (t: Throwable) {
+            val msg = "FAIL (update): ${t.javaClass.simpleName}: ${t.message}"
+            LogCollector.w(TAG, "selfTestSign $msg")
+            return msg
+        }
+        val t3 = System.nanoTime()
+
+        val signed = try {
+            sig.sign()
+        } catch (t: Throwable) {
+            val msg = "FAIL (sign): ${t.javaClass.simpleName}: ${t.message}"
+            LogCollector.w(TAG, "selfTestSign $msg")
+            return msg
+        }
+        val t4 = System.nanoTime()
+
+        val pretty = "OK sig=${signed.size}B " +
+            "getInstance=${(t1 - t0) / 1_000_000}ms " +
+            "initSign=${(t2 - t1) / 1_000_000}ms " +
+            "update=${(t3 - t2) / 1_000_000}ms " +
+            "sign=${(t4 - t3) / 1_000_000}ms"
+        LogCollector.d(TAG, "selfTestSign $pretty")
+        return pretty
+    }
+
     private fun loadKeyPair(): KeyPair? {
         return try {
             val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            val entry = ks.getEntry(KEY_ALIAS, null) as? KeyStore.PrivateKeyEntry
-                ?: return null
-            val priv: PrivateKey = entry.privateKey
-            val pub: PublicKey = entry.certificate.publicKey
+            // Bypass ks.getEntry() — it does an algorithm consistency check
+            // between the private key and the self-signed cert that wraps
+            // the public key. Android Keystore's Ed25519 cert generation
+            // has an OID-mapping quirk on some devices (MediaTek observed)
+            // that fails this check even for perfectly functional keys.
+            // Fetching the private key and certificate separately skips
+            // the check and returns the same load-bearing objects.
+            val priv = ks.getKey(KEY_ALIAS, null) as? PrivateKey ?: return null
+            val cert = ks.getCertificate(KEY_ALIAS) ?: return null
+            val pub: PublicKey = cert.publicKey
             KeyPair(pub, priv)
         } catch (t: Throwable) {
             LogCollector.w(TAG, "loadKeyPair failed: ${t.message}")
@@ -95,7 +174,7 @@ object SshKeyManager {
      *   SEQUENCE(0x30 0x2a, AlgorithmIdentifier(7 bytes, OID 1.3.101.112),
      *            BIT STRING(0x03 0x21 0x00, <32 raw bytes>))
      */
-    private fun extractEd25519RawPublicKey(pub: PublicKey): ByteArray {
+    internal fun extractEd25519RawPublicKey(pub: PublicKey): ByteArray {
         val encoded = pub.encoded
             ?: throw IllegalStateException("Keystore returned null-encoded public key")
         if (encoded.size < 32) {
