@@ -22,16 +22,26 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
+import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
+import dev.seekerzero.app.config.ConfigManager
+import java.io.File
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.seekerzero.app.BuildConfig
@@ -56,6 +66,7 @@ fun StatusScreen(viewModel: StatusViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item { ConnectionCard(connection, lastContact, reconnects) }
+            item { ProfileCard() }
             item { A0VersionCard(a0Version = health?.a0Version ?: "—") }
             item { SubordinatesCard(health?.subordinates ?: emptyList()) }
             if ((health?.erroredTasks?.size ?: 0) > 0) {
@@ -189,6 +200,93 @@ private fun ErrorsCard(errored: List<ErroredTask>) {
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileCard() {
+    val context = LocalContext.current
+    val avatarPath by ConfigManager.userAvatarPathFlow.collectAsStateWithLifecycle()
+    val displayName by ConfigManager.displayNameFlow.collectAsStateWithLifecycle()
+    val fallbackLetter = (displayName?.takeIf { it.isNotBlank() }?.trim()?.first()?.uppercase() ?: "Y")
+
+    // A revision counter forces Coil to re-fetch the image after the file on
+    // disk is overwritten with a new picture (same path → same cache key).
+    var revision by remember { mutableStateOf(0) }
+
+    val pickLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            val saved = runCatching {
+                val dir = File(context.filesDir, "profile").apply { mkdirs() }
+                val out = File(dir, "avatar.jpg")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    out.outputStream().use { output -> input.copyTo(output) }
+                }
+                out.absolutePath
+            }.getOrNull()
+            if (saved != null) {
+                ConfigManager.userAvatarPath = saved
+                revision += 1
+            }
+        }
+    }
+
+    CardSurface(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .padding(14.dp)
+                .fillMaxWidth()
+                .clickable {
+                    pickLauncher.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(SeekerZeroColors.SurfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (avatarPath != null) {
+                    // File (+ revision key) so Coil re-reads after overwrite.
+                    val file = remember(avatarPath, revision) { File(avatarPath!!) }
+                    AsyncImage(
+                        model = file,
+                        contentDescription = "your avatar",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text(
+                        text = fallbackLetter,
+                        color = SeekerZeroColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            Spacer(Modifier.size(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = displayName?.takeIf { it.isNotBlank() } ?: "You",
+                    color = SeekerZeroColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = if (avatarPath != null) "Tap to change photo" else "Tap to set a profile photo",
+                    color = SeekerZeroColors.TextSecondary,
+                    fontSize = 12.sp
+                )
             }
         }
     }

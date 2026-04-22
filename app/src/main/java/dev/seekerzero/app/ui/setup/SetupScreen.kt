@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -82,6 +83,14 @@ fun SetupScreen(
                     onManual = viewModel::onManualEntrySelected,
                     onDemo = {
                         dev.seekerzero.app.config.ConfigManager.applyDemoDefaults()
+                        // Fire and forget: downloads the demo avatar so the
+                        // chat + status screens render a professional image
+                        // right away. Letter fallback if the network fails.
+                        kotlinx.coroutines.CoroutineScope(
+                            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+                        ).launch {
+                            dev.seekerzero.app.demo.DemoData.provisionDemoAssets(context)
+                        }
                         onSetupComplete()
                     }
                 )

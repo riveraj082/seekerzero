@@ -54,4 +54,10 @@
     <string name="chat_empty_body">Send a prompt to Agent Zero. Responses will stream back token by token.</string>
     <string name="chat_composer_hint">Message Agent Zero</string>
     <string name="chat_send">Send</string>
+    <string name="chat_attach">Attach file</string>
+    <string name="chat_camera">Camera</string>
+    <string name="chat_camera_photo">Take photo</string>
+    <string name="chat_camera_video">Record video</string>
+    <string name="chat_mic_start">Record voice</string>
+    <string name="chat_mic_stop">Stop recording</string>
 </resources>

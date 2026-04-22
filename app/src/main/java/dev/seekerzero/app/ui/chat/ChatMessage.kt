@@ -1,5 +1,7 @@
 package dev.seekerzero.app.ui.chat
 
+import dev.seekerzero.app.chat.ChatAttachmentRef
+
 enum class ChatRole { USER, ASSISTANT }
 
 data class ChatMessage(
@@ -7,5 +9,6 @@ data class ChatMessage(
     val role: ChatRole,
     val content: String,
     val createdAtMs: Long,
-    val isFinal: Boolean
+    val isFinal: Boolean,
+    val attachments: List<ChatAttachmentRef> = emptyList(),
 )

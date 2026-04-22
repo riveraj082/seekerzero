@@ -1,11 +1,23 @@
 package dev.seekerzero.app.demo
 
+import android.content.Context
+import dev.seekerzero.app.api.MobileApiClient
+import dev.seekerzero.app.api.models.AttachmentUploaded
+import dev.seekerzero.app.api.models.AttachmentsUploadResponse
+import dev.seekerzero.app.api.models.ChatAttachmentDto
 import dev.seekerzero.app.api.models.ChatContext
 import dev.seekerzero.app.api.models.ChatContextCreateResponse
 import dev.seekerzero.app.api.models.ChatContextsResponse
 import dev.seekerzero.app.api.models.ChatHistoryResponse
 import dev.seekerzero.app.api.models.ChatMessageDto
 import dev.seekerzero.app.api.models.ChatSendResponse
+import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.util.LogCollector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import dev.seekerzero.app.api.models.ErroredTask
 import dev.seekerzero.app.api.models.HealthResponse
 import dev.seekerzero.app.api.models.SubordinateStatus
@@ -74,17 +86,77 @@ object DemoData {
 
     // ---------- Chat history (per context) --------------------------------
 
+    // ---------- Demo attachments (mapped to public CDN URLs) --------------
+
+    // Synthetic server paths used in seed messages. MobileApiClient.attachmentUrl
+    // maps these to the public URLs below when demoMode is active.
+    const val DEMO_IMAGE_PATH = "/demo/attachments/mobile-seekerzero/dashboard-a0prod-2026-04-22.jpg"
+    const val DEMO_AUDIO_PATH = "/demo/attachments/mobile-seekerzero/voice-stakeholder-review.mp3"
+    const val DEMO_VIDEO_PATH = "/demo/attachments/mobile-seekerzero/product-walkthrough.mp4"
+
+    // Stable public samples. Picsum is seed-deterministic; Google + SoundHelix
+    // have been stable for years.
+    val demoAssetUrls: Map<String, String> = mapOf(
+        DEMO_IMAGE_PATH to "https://picsum.photos/seed/seekerzero-dashboard/1200/800",
+        DEMO_AUDIO_PATH to "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        DEMO_VIDEO_PATH to "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+    )
+
+    private fun imageAttachment() = ChatAttachmentDto(
+        path = DEMO_IMAGE_PATH,
+        filename = "dashboard-a0prod-2026-04-22.jpg",
+        mime = "image/jpeg",
+        size = 842_374L,
+    )
+
+    private fun audioAttachment() = ChatAttachmentDto(
+        path = DEMO_AUDIO_PATH,
+        filename = "voice-stakeholder-review.mp3",
+        mime = "audio/mpeg",
+        size = 284_901L,
+    )
+
+    private fun videoAttachment() = ChatAttachmentDto(
+        path = DEMO_VIDEO_PATH,
+        filename = "product-walkthrough.mp4",
+        mime = "video/mp4",
+        size = 6_213_540L,
+    )
+
     private val seedHistory: Map<String, List<ChatMessageDto>> = mapOf(
         "mobile-seekerzero" to listOf(
             ChatMessageDto(
                 id = "msg-u-seed1", role = "user",
-                content = "What's the Solana Seeker phone?",
-                createdAtMs = now() - 120_000, isFinal = true
+                content = "Morning — here's the a0prod overnight dashboard. What stands out from last night's benchmark run?",
+                createdAtMs = now() - 6 * 3_600_000L, isFinal = true,
+                attachments = listOf(imageAttachment()),
             ),
             ChatMessageDto(
                 id = "msg-a-seed1", role = "assistant",
-                content = "The Solana Seeker is a crypto-native Android phone from Solana Mobile. It has hardware-isolated seed-vault key storage, a Web3 dApp store, and native Solana Pay integration. Successor to the Saga launched mid-2024.",
-                createdAtMs = now() - 118_000, isFinal = true
+                content = "Three things jump out. Nemotron 120B held 16.2 tok/s single / 42 agg at 4-concurrent — matches yesterday's reference, so the NVFP4+Marlin deployment is steady. qwen3-coder:30b sustained 61.8 tok/s through the 8-test benchmark; context ceilings never hit the new 49K cap. The pause-and-resume interaction on test 6 triggered the iter-stuck watchdog at the 10-min threshold, which is the expected safety path. Overall: green.",
+                createdAtMs = now() - 6 * 3_600_000L + 4_000, isFinal = true
+            ),
+            ChatMessageDto(
+                id = "msg-u-seed2", role = "user",
+                content = "Adding context for next week's stakeholder review — here's the voice note.",
+                createdAtMs = now() - 4 * 3_600_000L, isFinal = true,
+                attachments = listOf(audioAttachment()),
+            ),
+            ChatMessageDto(
+                id = "msg-a-seed2", role = "assistant",
+                content = "Transcribed your voice memo. Key points for the stakeholder deck:\n\n1. Phase A–I learning-system cleanup is closed; decay pipeline is now self-maintaining.\n2. Sonnet 4.6 stays primary; a0-work (qwen3.6) handles utility offload, a0-think (Nemotron) is deep-reasoning fallback.\n3. TTFT improvements from prefix caching are a 9× speedup on cache hits — worth a slide on its own.\n4. Phase J (v1.9 upgrade) is the next strategic decision, not yet started.\n\nWant me to draft the slide outline?",
+                createdAtMs = now() - 4 * 3_600_000L + 5_500, isFinal = true
+            ),
+            ChatMessageDto(
+                id = "msg-u-seed3", role = "user",
+                content = "Here's the SeekerZero walkthrough we're including in the deck. Review for cut-down suggestions.",
+                createdAtMs = now() - 1 * 3_600_000L, isFinal = true,
+                attachments = listOf(videoAttachment()),
+            ),
+            ChatMessageDto(
+                id = "msg-a-seed3", role = "assistant",
+                content = "Watched the walkthrough. Three suggestions:\n\n• The SSH terminal segment (0:42–1:08) runs long for non-technical viewers — trim to a 10-second shot of the prompt + one command.\n• The approvals-tab demo is no longer representative; it was replaced by the Status tab in v3. Either swap in a Status-tab clip or cut it.\n• The 'take photo' demonstration at 2:14 is the strongest single shot — lead with that instead of the config screen.\n\nTotal runtime after edits: about 1:40. Happy with that?",
+                createdAtMs = now() - 1 * 3_600_000L + 6_800, isFinal = true
             )
         ),
         "mobile-demo2" to listOf(
@@ -117,6 +189,59 @@ object DemoData {
             assistantMessageId = "msg-a-${UUID.randomUUID().toString().take(12)}",
             createdAtMs = now()
         )
+    }
+
+    // ---------- Demo asset provisioning ----------------------------------
+
+    private const val DEMO_AVATAR_URL = "https://picsum.photos/seed/james-rivera/240/240"
+
+    /**
+     * Idempotent: downloads a stable Picsum portrait once per install and
+     * points ConfigManager.userAvatarPath at it so the chat + status avatars
+     * render a professional image in demo mode. If the network call fails,
+     * we silently leave the letter-fallback avatar in place.
+     */
+    suspend fun provisionDemoAssets(context: Context) {
+        if (!ConfigManager.demoMode) return
+        val dir = File(context.filesDir, "profile").apply { mkdirs() }
+        val file = File(dir, "avatar-demo.jpg")
+        if (file.exists() && file.length() > 0L) {
+            if (ConfigManager.userAvatarPath != file.absolutePath) {
+                ConfigManager.userAvatarPath = file.absolutePath
+            }
+            return
+        }
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val conn = (URL(DEMO_AVATAR_URL).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8_000
+                    readTimeout = 15_000
+                    instanceFollowRedirects = true
+                }
+                conn.inputStream.use { input ->
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+                conn.disconnect()
+            }
+            ConfigManager.userAvatarPath = file.absolutePath
+        }.onFailure {
+            LogCollector.w("DemoData", "avatar download failed: ${it.message}")
+        }
+    }
+
+    fun uploadAttachments(
+        contextId: String,
+        parts: List<MobileApiClient.UploadPart>
+    ): AttachmentsUploadResponse {
+        val attachments = parts.map { p ->
+            AttachmentUploaded(
+                path = "/demo/attachments/$contextId/${now()}_${p.filename}",
+                filename = p.filename,
+                size = if (p.size >= 0) p.size else 0L,
+                mime = p.mime
+            )
+        }
+        return AttachmentsUploadResponse(ok = true, context = contextId, attachments = attachments)
     }
 
     /**

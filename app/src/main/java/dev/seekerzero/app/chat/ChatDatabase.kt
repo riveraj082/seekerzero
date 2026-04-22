@@ -9,7 +9,7 @@ import dev.seekerzero.app.ssh.KnownHostEntity
 
 @Database(
     entities = [ChatMessageEntity::class, KnownHostEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {

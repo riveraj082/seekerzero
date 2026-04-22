@@ -17,6 +17,7 @@ object ConfigManager {
     private const val K_SERVICE_ENABLED = "service_enabled"
     private const val K_ACTIVE_CHAT_CONTEXT = "active_chat_context"
     private const val K_DEMO_MODE = "demo_mode"
+    private const val K_USER_AVATAR_PATH = "user_avatar_path"
 
     private const val DEFAULT_API_BASE = "/mobile"
     private const val DEFAULT_PORT = 50080
@@ -51,6 +52,9 @@ object ConfigManager {
     private val _demoMode = MutableStateFlow(false)
     val demoModeFlow: StateFlow<Boolean> = _demoMode
 
+    private val _userAvatarPath = MutableStateFlow<String?>(null)
+    val userAvatarPathFlow: StateFlow<String?> = _userAvatarPath
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         _a0Host.value = prefs.getString(K_A0_HOST, null)
@@ -63,6 +67,7 @@ object ConfigManager {
         _activeChatContext.value = prefs.getString(K_ACTIVE_CHAT_CONTEXT, DEFAULT_CHAT_CONTEXT)
             ?: DEFAULT_CHAT_CONTEXT
         _demoMode.value = prefs.getBoolean(K_DEMO_MODE, false)
+        _userAvatarPath.value = prefs.getString(K_USER_AVATAR_PATH, null)
     }
 
     var a0Host: String?
@@ -127,6 +132,15 @@ object ConfigManager {
         set(value) {
             prefs.edit().putBoolean(K_DEMO_MODE, value).apply()
             _demoMode.value = value
+        }
+
+    var userAvatarPath: String?
+        get() = _userAvatarPath.value
+        set(value) {
+            prefs.edit().apply {
+                if (value == null) remove(K_USER_AVATAR_PATH) else putString(K_USER_AVATAR_PATH, value)
+            }.apply()
+            _userAvatarPath.value = value
         }
 
     /**

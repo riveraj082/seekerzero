@@ -5,12 +5,20 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.VideoFrameDecoder
 import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.demo.DemoData
 import dev.seekerzero.app.util.LogCollector
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 
-class SeekerZeroApplication : Application() {
+class SeekerZeroApplication : Application(), ImageLoaderFactory {
 
     companion object {
         const val CHANNEL_SERVICE = "seekerzero_service"
@@ -40,7 +48,25 @@ class SeekerZeroApplication : Application() {
         }
 
         nm.createNotificationChannel(serviceChannel)
+
+        // Demo mode: kick off a one-time avatar download on a background
+        // coroutine. Safe if the network is unavailable — falls through to
+        // the letter-fallback avatar.
+        if (ConfigManager.demoMode) {
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                DemoData.provisionDemoAssets(this@SeekerZeroApplication)
+            }
+        }
     }
+
+    /**
+     * Coil's singleton loader. VideoFrameDecoder lets AsyncImage render a
+     * frame from a video file/URI as the thumbnail.
+     */
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .components { add(VideoFrameDecoder.Factory()) }
+            .build()
 
     /**
      * Replace Android's stripped BouncyCastle stub (registered as "BC")

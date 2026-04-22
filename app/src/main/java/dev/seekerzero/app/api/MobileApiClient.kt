@@ -1,5 +1,6 @@
 package dev.seekerzero.app.api
 
+import dev.seekerzero.app.api.models.AttachmentsUploadResponse
 import dev.seekerzero.app.api.models.ChatContextsResponse
 import dev.seekerzero.app.api.models.ChatHistoryResponse
 import dev.seekerzero.app.api.models.ChatSendRequest
@@ -26,12 +27,19 @@ import kotlin.coroutines.coroutineContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSink
+import okio.buffer
+import okio.source
 import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -63,6 +71,29 @@ object MobileApiClient {
             .readTimeout(0, TimeUnit.MILLISECONDS) // no timeout: NDJSON is long-lived with 25s keepalives
             .build()
     }
+
+    private val uploadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            // Large attachments over cellular + Tailscale can take minutes.
+            .writeTimeout(0, TimeUnit.MILLISECONDS)
+            .readTimeout(5, TimeUnit.MINUTES)
+            .callTimeout(0, TimeUnit.MILLISECONDS)
+            // Request body re-reads the file on retry; keep transparent retry on.
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /**
+     * A single attachment part to upload. `streamProvider` may be called
+     * more than once by OkHttp on retry, so it must return a fresh stream.
+     * Pass `size = -1L` if the length is unknown (OkHttp will use chunked).
+     */
+    data class UploadPart(
+        val filename: String,
+        val mime: String,
+        val size: Long,
+        val streamProvider: () -> InputStream
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -203,7 +234,11 @@ object MobileApiClient {
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    suspend fun chatSend(contextId: String, content: String): Result<ChatSendResponse> {
+    suspend fun chatSend(
+        contextId: String,
+        content: String,
+        attachments: List<String> = emptyList()
+    ): Result<ChatSendResponse> {
         if (ConfigManager.demoMode) {
             val resp = DemoData.chatSend(contextId, content)
             GlobalScope.launch {
@@ -224,7 +259,7 @@ object MobileApiClient {
             val url = buildUrl("/chat/send")
             val bodyJson = json.encodeToString(
                 ChatSendRequest.serializer(),
-                ChatSendRequest(context = contextId, content = content)
+                ChatSendRequest(context = contextId, content = content, attachments = attachments)
             )
             LogCollector.d(TAG, "POST $url")
             val body = execute(
@@ -233,6 +268,90 @@ object MobileApiClient {
             )
             json.decodeFromString(ChatSendResponse.serializer(), body)
         }.onFailure { LogCollector.w(TAG, "chatSend() failed: ${it.message}") }
+    }
+
+    /**
+     * Upload one or more attachments for a chat context. Returns the server
+     * paths to include in the next `chatSend(..., attachments = ...)`.
+     *
+     * `onProgress` is called from the upload thread with (bytesSent, totalBytes).
+     * totalBytes may be -1 if any part has unknown length.
+     */
+    suspend fun uploadAttachments(
+        contextId: String,
+        parts: List<UploadPart>,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ): Result<AttachmentsUploadResponse> {
+        if (parts.isEmpty()) {
+            return Result.failure(IllegalArgumentException("no parts to upload"))
+        }
+        if (ConfigManager.demoMode) {
+            return Result.success(DemoData.uploadAttachments(contextId, parts))
+        }
+        return runCatching {
+            val url = buildUrl("/chat/attachments")
+            val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("context", contextId)
+            var totalBytes = 0L
+            var knownTotal = true
+            for (part in parts) {
+                if (part.size < 0) knownTotal = false else totalBytes += part.size
+                val mediaType = runCatching { part.mime.toMediaType() }.getOrNull()
+                    ?: "application/octet-stream".toMediaType()
+                builder.addFormDataPart(
+                    "files",
+                    part.filename,
+                    streamingBody(part, mediaType)
+                )
+            }
+            val multipart = builder.build()
+            val reportedTotal = if (knownTotal) totalBytes else -1L
+            val progressWrapped = if (onProgress != null) {
+                ProgressRequestBody(multipart, reportedTotal, onProgress)
+            } else {
+                multipart
+            }
+            LogCollector.d(TAG, "POST $url (${parts.size} file(s))")
+            val body = execute(
+                uploadClient,
+                Request.Builder().url(url).post(progressWrapped).build()
+            )
+            json.decodeFromString(AttachmentsUploadResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "uploadAttachments() failed: ${it.message}") }
+    }
+
+    private fun streamingBody(part: UploadPart, mediaType: MediaType): RequestBody =
+        object : RequestBody() {
+            override fun contentType(): MediaType = mediaType
+            override fun contentLength(): Long = part.size
+            override fun writeTo(sink: BufferedSink) {
+                part.streamProvider().use { input ->
+                    input.source().use { source -> sink.writeAll(source) }
+                }
+            }
+        }
+
+    private class ProgressRequestBody(
+        private val delegate: RequestBody,
+        private val totalHint: Long,
+        private val onProgress: (Long, Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType(): MediaType? = delegate.contentType()
+        override fun contentLength(): Long = delegate.contentLength()
+        override fun writeTo(sink: BufferedSink) {
+            val total = if (totalHint >= 0) totalHint else delegate.contentLength()
+            val wrapper = object : okio.ForwardingSink(sink) {
+                var sent = 0L
+                override fun write(source: okio.Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    sent += byteCount
+                    onProgress(sent, total)
+                }
+            }
+            val bufferedWrapper = wrapper.buffer()
+            delegate.writeTo(bufferedWrapper)
+            bufferedWrapper.flush()
+        }
     }
 
     /**
@@ -285,6 +404,28 @@ object MobileApiClient {
             cancelHandle?.dispose()
             runCatching { call.cancel() }
         }
+    }
+
+    /**
+     * Build a download URL for a server-side attachment. `attachmentPath` is
+     * the absolute filesystem path A0 sees (e.g. returned by uploadAttachments
+     * or replayed via chat history). Returns null if the path doesn't look
+     * like an attachment under a mobile context.
+     */
+    fun attachmentUrl(attachmentPath: String): String? {
+        // Demo mode: the synthetic /demo/... paths seeded into chat history
+        // map straight to public CDN URLs (no tailnet, no a0prod involved).
+        if (ConfigManager.demoMode) {
+            DemoData.demoAssetUrls[attachmentPath]?.let { return it }
+        }
+        val parts = attachmentPath.trim().trimEnd('/').split('/')
+        if (parts.size < 2) return null
+        val filename = parts.last()
+        val contextId = parts[parts.size - 2]
+        if (filename.isBlank() || contextId.isBlank()) return null
+        val encodedName = java.net.URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+        val encodedCtx = java.net.URLEncoder.encode(contextId, "UTF-8").replace("+", "%20")
+        return buildUrl("/chat/attachments/$encodedCtx/$encodedName")
     }
 
     private fun buildUrl(pathSuffix: String): String {

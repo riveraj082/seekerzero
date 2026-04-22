@@ -10,7 +10,9 @@
 
 import asyncio
 import json
+import mimetypes
 import queue
+import shutil
 import threading
 import time
 import uuid
@@ -18,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, Request, Response, request as flask_request, stream_with_context
+from flask import Flask, Request, Response, request as flask_request, send_file, stream_with_context
 
 from python.helpers.api import ApiHandler, Input, Output, ThreadLockType
 
@@ -28,6 +30,7 @@ _A0_VERSION = '0.9.8.2'
 
 # ---- Chat (Phase 5 Step 4a: routed through A0 agent loop) ----------------
 _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
+_ATTACH_DIR = Path('/a0/usr/seekerzero/attachments')
 _CHAT_DEFAULT_CONTEXT = 'mobile-seekerzero'
 _CHAT_MOBILE_PREFIX = 'mobile-'
 _CHAT_DISPLAY_NAME = {'mobile-seekerzero': 'Seeker'}
@@ -149,9 +152,16 @@ def _chat_read_log(context_id: str) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # Legacy records stored attachments as a list of path strings;
+                # new ones store enriched {path, filename, mime, size} dicts.
+                # Normalize on read so clients only see the enriched shape.
+                raw = rec.get('attachments')
+                if isinstance(raw, list) and raw and all(isinstance(x, str) for x in raw):
+                    rec['attachments'] = [_attach_meta(Path(p)) for p in raw]
+                out.append(rec)
     except OSError:
         return []
     return out
@@ -280,7 +290,12 @@ def _chat_get_or_create_context(context_id: str):
     return ctx
 
 
-def _chat_dispatch_to_a0(context_id: str, user_text: str, assistant_id: str) -> bool:
+def _chat_dispatch_to_a0(
+    context_id: str,
+    user_text: str,
+    assistant_id: str,
+    attachments: Optional[List[str]] = None,
+) -> bool:
     """Kick off an A0 turn for the given context. Returns True on success.
     The assistant reply arrives as live events emitted by the mobile
     response_stream + monologue_end extensions; nothing is awaited here."""
@@ -296,7 +311,7 @@ def _chat_dispatch_to_a0(context_id: str, user_text: str, assistant_id: str) -> 
 
     try:
         ctx = _chat_get_or_create_context(context_id)
-        ctx.communicate(UserMessage(message=user_text, attachments=[]))
+        ctx.communicate(UserMessage(message=user_text, attachments=list(attachments or [])))
         return True
     except Exception as e:
         # Roll back turn state so the next send isn't stuck waiting for a
@@ -429,6 +444,13 @@ def _chat_contexts_delete_view(context_id: str):
             mirror.unlink()
     except OSError:
         pass
+    # Delete any attachments uploaded in this context.
+    try:
+        attach_dir = _ATTACH_DIR / context_id
+        if attach_dir.is_dir():
+            shutil.rmtree(attach_dir, ignore_errors=True)
+    except OSError:
+        pass
     body = {'ok': True, 'id': context_id}
     return Response(json.dumps(body), status=200, mimetype='application/json')
 
@@ -459,6 +481,157 @@ def _chat_history_view():
     return Response(json.dumps(body), status=200, mimetype='application/json')
 
 
+_ATTACH_FILENAME_SAFE = set(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
+)
+
+
+def _attach_sanitize_filename(raw: str) -> str:
+    # Strip path components, restrict to a safe charset, cap length.
+    name = (raw or '').replace('\\', '/').split('/')[-1].strip()
+    if not name:
+        name = 'file'
+    cleaned = ''.join(c if c in _ATTACH_FILENAME_SAFE else '_' for c in name)
+    # Guard against leading dots creating hidden / .. names.
+    cleaned = cleaned.lstrip('.')
+    if not cleaned:
+        cleaned = 'file'
+    return cleaned[:180]
+
+
+def _attach_context_dir(context_id: str) -> Optional[Path]:
+    # Only mobile-* contexts (plus the default) may host attachments.
+    if not context_id:
+        return None
+    if context_id != _CHAT_DEFAULT_CONTEXT and not context_id.startswith(_CHAT_MOBILE_PREFIX):
+        return None
+    d = _ATTACH_DIR / context_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _attach_meta(p: Path) -> Dict[str, Any]:
+    # Richer metadata for the chat log + UI. Path remains the source of truth
+    # that A0 consumes; filename/mime/size are UX affordances for playback.
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = 0
+    mime, _ = mimetypes.guess_type(str(p))
+    return {
+        'path': str(p),
+        'filename': p.name,
+        'size': size,
+        'mime': mime or 'application/octet-stream',
+    }
+
+
+def _attach_validate_path(path: str, context_id: str) -> Optional[Path]:
+    # Accept only absolute paths that resolve inside the per-context attachment
+    # dir and point at an existing regular file. Prevents the phone from
+    # slipping arbitrary filesystem paths into UserMessage.attachments.
+    if not path:
+        return None
+    try:
+        p = Path(path).resolve()
+    except Exception:
+        return None
+    base = _attach_context_dir(context_id)
+    if base is None:
+        return None
+    try:
+        base_resolved = base.resolve()
+    except Exception:
+        return None
+    try:
+        p.relative_to(base_resolved)
+    except ValueError:
+        return None
+    if not p.is_file():
+        return None
+    return p
+
+
+def _chat_attachment_download_view(context_id: str, filename: str):
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    # Reject anything that could escape the per-context attachment dir. The
+    # filename on disk is always {ts}_{uuid8}_{sanitized-name}, all chars from
+    # the _ATTACH_FILENAME_SAFE set — so any slash, backslash, or '..' means
+    # a tampered URL.
+    if not filename or '/' in filename or '\\' in filename or filename.startswith('.'):
+        return _bad_request('invalid filename')
+    ctx_dir = _attach_context_dir(context_id)
+    if ctx_dir is None:
+        return _bad_request('invalid context')
+    target = ctx_dir / filename
+    try:
+        resolved = target.resolve()
+        base_resolved = ctx_dir.resolve()
+    except Exception:
+        return _bad_request('invalid filename')
+    try:
+        resolved.relative_to(base_resolved)
+    except ValueError:
+        return _bad_request('invalid filename')
+    if not resolved.is_file():
+        return Response(
+            json.dumps({'ok': False, 'error': 'not found'}),
+            status=404,
+            mimetype='application/json',
+        )
+    mime, _ = mimetypes.guess_type(str(resolved))
+    return send_file(
+        str(resolved),
+        mimetype=mime or 'application/octet-stream',
+        as_attachment=False,
+        conditional=True,
+    )
+
+
+def _chat_attachments_upload_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+
+    context_id = (flask_request.form.get('context') or _CHAT_DEFAULT_CONTEXT).strip()
+    ctx_dir = _attach_context_dir(context_id)
+    if ctx_dir is None:
+        return _bad_request('invalid context')
+
+    files = flask_request.files.getlist('files')
+    if not files:
+        return _bad_request('no files uploaded (expected multipart field "files")')
+
+    saved: List[Dict[str, Any]] = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        safe = _attach_sanitize_filename(f.filename)
+        prefix = f'{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}'
+        dest = ctx_dir / f'{prefix}_{safe}'
+        # FileStorage.save() streams from the incoming request body via
+        # shutil.copyfileobj — no whole-file buffering in memory.
+        f.save(str(dest))
+        try:
+            size = dest.stat().st_size
+        except OSError:
+            size = 0
+        saved.append({
+            'path': str(dest),
+            'filename': safe,
+            'size': size,
+            'mime': f.mimetype or 'application/octet-stream',
+        })
+
+    if not saved:
+        return _bad_request('no files uploaded (expected multipart field "files")')
+
+    body = {'ok': True, 'context': context_id, 'attachments': saved}
+    return Response(json.dumps(body), status=200, mimetype='application/json')
+
+
 def _chat_send_view():
     ip = _client_ip()
     if not _is_tailnet(ip):
@@ -469,8 +642,21 @@ def _chat_send_view():
         return _bad_request('body must be JSON')
     context_id = payload.get('context') or _CHAT_DEFAULT_CONTEXT
     content = (payload.get('content') or '').strip()
-    if not content:
-        return _bad_request('content required')
+    raw_attachments = payload.get('attachments') or []
+    if not isinstance(raw_attachments, list):
+        return _bad_request('attachments must be a list of server paths')
+
+    attachment_paths: List[str] = []
+    for entry in raw_attachments:
+        if not isinstance(entry, str):
+            return _bad_request('attachments must be strings')
+        valid = _attach_validate_path(entry, context_id)
+        if valid is None:
+            return _bad_request(f'invalid attachment path: {entry}')
+        attachment_paths.append(str(valid))
+
+    if not content and not attachment_paths:
+        return _bad_request('content or attachments required')
 
     if not _chat_set_busy(context_id, True):
         body = json.dumps({'ok': False, 'error': 'context busy; wait for current reply to finish'})
@@ -487,20 +673,27 @@ def _chat_send_view():
         'created_at_ms': now_ms,
         'is_final': True,
     }
+    attachment_meta: List[Dict[str, Any]] = []
+    if attachment_paths:
+        attachment_meta = [_attach_meta(Path(p)) for p in attachment_paths]
+        user_record['attachments'] = attachment_meta
     _chat_append_log(context_id, user_record)
-    _chat_publish(context_id, {
+    publish_evt = {
         'type': 'user_msg',
         'message_id': user_id,
         'role': 'user',
         'content': content,
         'created_at_ms': now_ms,
-    })
+    }
+    if attachment_meta:
+        publish_evt['attachments'] = attachment_meta
+    _chat_publish(context_id, publish_evt)
 
     # Hand off to A0's agent loop. The reply will arrive asynchronously as
     # delta events (from the response_stream extension) and a final event
     # (from the monologue_end extension), both of which publish to the
     # same pub/sub the client is subscribed to via /mobile/chat/stream.
-    if not _chat_dispatch_to_a0(context_id, content, assistant_id):
+    if not _chat_dispatch_to_a0(context_id, content, assistant_id, attachment_paths):
         # _chat_dispatch_to_a0 already cleared busy + published an error final.
         return Response(
             json.dumps({'ok': False, 'error': 'a0 dispatch failed'}),
@@ -883,6 +1076,18 @@ class SeekerzeroMobileApi(ApiHandler):
                 '/mobile/chat/history',
                 'seekerzero_mobile_chat_history',
                 _chat_history_view,
+                methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/chat/attachments',
+                'seekerzero_mobile_chat_attachments_upload',
+                _chat_attachments_upload_view,
+                methods=['POST'],
+            )
+            app.add_url_rule(
+                '/mobile/chat/attachments/<context_id>/<path:filename>',
+                'seekerzero_mobile_chat_attachment_download',
+                _chat_attachment_download_view,
                 methods=['GET'],
             )
             app.add_url_rule(

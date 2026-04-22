@@ -22,7 +22,16 @@ data class ChatMessageDto(
     val role: String,
     val content: String,
     @SerialName("created_at_ms") val createdAtMs: Long,
-    @SerialName("is_final") val isFinal: Boolean = true
+    @SerialName("is_final") val isFinal: Boolean = true,
+    val attachments: List<ChatAttachmentDto> = emptyList(),
+)
+
+@Serializable
+data class ChatAttachmentDto(
+    val path: String,
+    val filename: String,
+    val mime: String,
+    val size: Long = 0L,
 )
 
 @Serializable
@@ -35,7 +44,23 @@ data class ChatHistoryResponse(
 @Serializable
 data class ChatSendRequest(
     val context: String,
-    val content: String
+    val content: String,
+    val attachments: List<String> = emptyList()
+)
+
+@Serializable
+data class AttachmentUploaded(
+    val path: String,
+    val filename: String,
+    val size: Long,
+    val mime: String
+)
+
+@Serializable
+data class AttachmentsUploadResponse(
+    val ok: Boolean,
+    val context: String,
+    val attachments: List<AttachmentUploaded> = emptyList()
 )
 
 @Serializable

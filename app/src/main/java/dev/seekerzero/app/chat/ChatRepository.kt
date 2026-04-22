@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.UUID
@@ -89,12 +90,15 @@ class ChatRepository private constructor(
 
     suspend fun send(
         contextId: String = DEFAULT_CONTEXT,
-        content: String
+        content: String,
+        attachments: List<String> = emptyList()
     ): Result<String> {
         val trimmed = content.trim()
-        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("empty content"))
+        if (trimmed.isEmpty() && attachments.isEmpty()) {
+            return Result.failure(IllegalArgumentException("empty content"))
+        }
 
-        val result = MobileApiClient.chatSend(contextId, trimmed)
+        val result = MobileApiClient.chatSend(contextId, trimmed, attachments)
         result.onSuccess { resp ->
             // Optimistic inserts so the UI updates before the stream delivers the events.
             dao.upsert(
@@ -134,6 +138,7 @@ class ChatRepository private constructor(
                 val content = obj["content"]?.jsonPrimitive?.content.orEmpty()
                 val createdAt = obj["created_at_ms"]?.jsonPrimitive?.content?.toLongOrNull()
                     ?: System.currentTimeMillis()
+                val attachments = parseAttachments(obj["attachments"] as? JsonArray)
                 dao.upsert(
                     ChatMessageEntity(
                         context_id = contextId,
@@ -141,7 +146,8 @@ class ChatRepository private constructor(
                         role = "user",
                         content = content,
                         created_at_ms = createdAt,
-                        is_final = true
+                        is_final = true,
+                        attachments_json = encodeAttachments(attachments)
                     )
                 )
             }
@@ -257,6 +263,59 @@ class ChatRepository private constructor(
         role = role,
         content = content,
         created_at_ms = createdAtMs,
-        is_final = isFinal
+        is_final = isFinal,
+        attachments_json = encodeAttachments(
+            attachments.map {
+                ChatAttachmentRef(path = it.path, filename = it.filename, mime = it.mime, size = it.size)
+            }
+        ),
     )
+
+    private fun parseAttachments(arr: JsonArray?): List<ChatAttachmentRef> {
+        if (arr == null) return emptyList()
+        return arr.mapNotNull { el ->
+            // Legacy: bare path string. Modern: {path, filename, mime, size}.
+            when (el) {
+                is JsonObject -> {
+                    val path = el["path"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                    val filename = el["filename"]?.jsonPrimitive?.content
+                        ?: path.substringAfterLast('/')
+                    val mime = el["mime"]?.jsonPrimitive?.content ?: guessMime(path)
+                    val size = el["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                    ChatAttachmentRef(path = path, filename = filename, mime = mime, size = size)
+                }
+                else -> {
+                    val path = (el as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        ?: return@mapNotNull null
+                    ChatAttachmentRef(
+                        path = path,
+                        filename = path.substringAfterLast('/'),
+                        mime = guessMime(path),
+                        size = 0L,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun guessMime(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "heic" -> "image/heic"
+            "m4a", "mp4a" -> "audio/mp4"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "ogg", "opus" -> "audio/ogg"
+            "mp4" -> "video/mp4"
+            "mov" -> "video/quicktime"
+            "webm" -> "video/webm"
+            "pdf" -> "application/pdf"
+            "txt", "md" -> "text/plain"
+            else -> "application/octet-stream"
+        }
+    }
 }
