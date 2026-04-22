@@ -13,7 +13,7 @@ JSON schema (v=1):
 
 Usage:
   uv run tools/generate_qr.py
-  uv run tools/generate_qr.py --a0-host a0prod.your-tailnet.ts.net --port 50080
+  uv run tools/generate_qr.py --a0-host a0prod.<your-tailnet>.ts.net --port 50080
   uv run tools/generate_qr.py --raw-payload   # emit just the base64 (no URI wrapper)
 """
 
@@ -29,11 +29,11 @@ import qrcode
 
 
 DEFAULTS = {
-    "a0_host": "a0prod.your-tailnet.ts.net",
+    "a0_host": "a0prod.example.ts.net",
     "port": 50080,
     "mobile_api_base": "/mobile",
-    "client_id": "seekerzero-james-seeker",
-    "display_name": "James's Seeker",
+    "client_id": "seekerzero-my-seeker",
+    "display_name": "My Seeker",
 }
 
 

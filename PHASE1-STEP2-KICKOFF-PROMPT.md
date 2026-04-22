@@ -139,7 +139,7 @@ The session is complete when all of the following are true:
 1. `./gradlew assembleDebug` runs successfully with no new warnings beyond those present after Step 1.
 2. Fresh install on emulator launches into `SetupScreen`. Completing a QR scan against a0prod's `/mobile/health` endpoint lands the user in `MainScaffold` with four tab stubs visible.
 3. Re-launching the app after setup skips `SetupScreen` and goes straight to `MainScaffold`.
-4. `/mobile/health` on a0prod returns the JSON shape above over the tailnet. `curl -s http://a0prod.your-tailnet.ts.net/mobile/health` from another tailnet peer prints valid JSON with `"ok": true`.
+4. `/mobile/health` on a0prod returns the JSON shape above over the tailnet. `curl -s http://a0prod.<your-tailnet>.ts.net/mobile/health` from another tailnet peer prints valid JSON with `"ok": true`.
 5. Manual-entry fallback works (no camera available → user types the host → same flow lands on `MainScaffold`).
 6. Notification-permission and battery-optimization dialogs are presented on API 33+ and are skippable without breaking navigation.
 7. No direct HTTP calls outside `MobileApiClient`. No raw `Log.d` / `println` — all logs go through `LogCollector`. No hardcoded tailnet host anywhere in code.
@@ -158,6 +158,6 @@ Report back with the commands run, updated file tree, `curl` output for `/mobile
 - Do not create any file not listed above. If you think another file is needed, stop and raise it.
 - Every load-bearing invariant in `CLAUDE.md` applies. If a choice would weaken one, stop and raise it.
 - After making changes, re-read the files you changed before claiming they're done. Do not trust your memory of what you wrote.
-- Windows working tree is canonical for builds; a0prod mirror at `/home/a0user/agent-zero-data/projects/seekerzero/` must be kept in sync via `tar | ssh` after each meaningful change.
+- Windows working tree is canonical for builds; a0prod mirror at `$HOME/agent-zero-data/projects/seekerzero/` must be kept in sync via `tar | ssh` after each meaningful change.
 
 Begin by reading the four source documents listed above, then tell me what you understand the project state to be and propose a plan for the session.

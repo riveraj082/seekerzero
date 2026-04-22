@@ -4,7 +4,7 @@
 
 ## What is this project
 
-**SeekerZero** is a native Android app (Kotlin + Jetpack Compose) that runs on the Solana Seeker phone. It is a full **Agent Zero** client (local AI orchestration system running on `a0prod` at `a0prod.your-tailnet.ts.net`). The phone joins the existing Tailscale tailnet and talks to Agent Zero over a dedicated `/mobile/*` JSON API plus direct SSH to the a0prod host. The app's v1 surfaces are: **Chat** (freeform prompts with token-streamed responses), **Approvals** (shipped: pending gates + approve/reject), **Tasks** (read + create scheduled tasks), and **Terminal** (SSH pty to a0prod).
+**SeekerZero** is a native Android app (Kotlin + Jetpack Compose) that runs on the Solana Seeker phone. It is a full **Agent Zero** client (local AI orchestration system running on `a0prod` at `a0prod.<your-tailnet>.ts.net`). The phone joins the existing Tailscale tailnet and talks to Agent Zero over a dedicated `/mobile/*` JSON API plus direct SSH to the a0prod host. The app's v1 surfaces are: **Chat** (freeform prompts with token-streamed responses), **Approvals** (shipped: pending gates + approve/reject), **Tasks** (read + create scheduled tasks), and **Terminal** (SSH pty to a0prod).
 
 SeekerZero does **not** run any AI on the phone, does **not** interact with the Solana blockchain, and does **not** talk to Telegram, Claude, OpenAI, or any third party directly. All AI work happens server-side in Agent Zero; the phone is the control surface.
 

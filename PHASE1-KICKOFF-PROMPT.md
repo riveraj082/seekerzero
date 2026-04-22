@@ -29,7 +29,7 @@ Specifically, create exactly these things:
    - `buildFeatures { compose = true; buildConfig = true }`
    - Plugins: `android.application`, `kotlin.android`, `kotlin.compose`, `kotlin.serialization`
    - Dependencies from the versions catalog only (no inline version strings)
-   - `BuildConfig` fields injected at build time: `A0PROD_HOST` (default `"a0prod.your-tailnet.ts.net"`), `GIT_SHA` (short, via `providers.exec` if available; otherwise `"unknown"`), `BUILD_DATE` (ISO date)
+   - `BuildConfig` fields injected at build time: `A0PROD_HOST` (default `"a0prod.<your-tailnet>.ts.net"`), `GIT_SHA` (short, via `providers.exec` if available; otherwise `"unknown"`), `BUILD_DATE` (ISO date)
    - ProGuard/R8 minify + shrinkResources enabled on release
    - **Do not include:** NDK, CMake, `externalNativeBuild`, `abiFilters`, product flavors, Firebase, Google Services plugin, Solana libraries, nanohttpd, any nodejs-mobile download task. Reject all of these if they come up.
 

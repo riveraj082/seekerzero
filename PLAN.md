@@ -24,7 +24,7 @@ MIT license permits copying code with attribution. Any non-trivial snippet taken
 
 | Area | Decision |
 |---|---|
-| **Transport** | Tailscale. Seeker joins existing tailnet, talks directly to a0prod at `a0prod.your-tailnet.ts.net`. No relay, no separate WireGuard layer. |
+| **Transport** | Tailscale. Seeker joins existing tailnet, talks directly to a0prod at `a0prod.<your-tailnet>.ts.net`. No relay, no separate WireGuard layer. |
 | **Auth** | Tailscale device identity. No app-level login, no tokens, no API keys. Device on the tailnet = authorized. |
 | **Stack** | Native Kotlin + Jetpack Compose + Material 3. Android Studio. No cross-platform framework. |
 | **Solana Mobile SDK** | Not used. SeekerZero does not touch the blockchain or wallets. Seeker is a normal Android device. |
@@ -259,7 +259,7 @@ Ships when: opening the Terminal tab on the phone connects to a0prod over SSH on
 
 **Server-side work:**
 - None in A0. Just standard OpenSSH on a0prod host.
-- Operator task: drop SeekerZero's per-device public key (displayed on SetupScreen) into `~/.ssh/authorized_keys` for user `a0user` once per device. Documented in `server/README.md`.
+- Operator task: drop SeekerZero's per-device public key (displayed on SetupScreen) into `~/.ssh/authorized_keys` for your host user once per device. Documented in `server/README.md`.
 
 **App work:**
 - `SshKeyManager`: on first SetupScreen load after QR scan, generate an Ed25519 keypair in Android Keystore (hardware-backed where available; fall back to software-backed on older Seeker models). Private key never leaves the phone. Surface the public key as a copyable block + QR code on SetupScreen for easy desktop paste.
@@ -348,7 +348,7 @@ Derived from SeekerClaw's `build.gradle.kts` with aggressive subtractions.
 Expected size: SeekerClaw's `build.gradle.kts` is ~230 lines. SeekerZero's target is ~80 lines.
 
 **Custom `BuildConfig` fields to inject:**
-- `A0PROD_HOST` — default tailnet host string for debug builds (`a0prod.your-tailnet.ts.net`)
+- `A0PROD_HOST` — default tailnet host string for debug builds (`a0prod.<your-tailnet>.ts.net`)
 - Git SHA (short), via `providers.exec` at build time
 - Build date (ISO format)
 
@@ -483,7 +483,7 @@ Plain JSON, no encryption (no secrets — Tailscale identity is the auth):
 ```json
 {
   "v": 1,
-  "a0_host": "a0prod.your-tailnet.ts.net",
+  "a0_host": "a0prod.<your-tailnet>.ts.net",
   "port": 50080,
   "mobile_api_base": "/mobile",
   "client_id": "seekerzero-james-seeker",
