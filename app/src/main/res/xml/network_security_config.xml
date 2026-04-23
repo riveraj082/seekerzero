@@ -5,5 +5,9 @@
         <!-- Cleartext is permitted to any Tailscale MagicDNS host (*.ts.net). The app
              only talks to the tailnet peer configured via QR + ConfigManager at runtime. -->
         <domain includeSubdomains="true">ts.net</domain>
+        <!-- Fallback: raw tailnet IP for a0prod. Used when MagicDNS on the phone
+             returns the LAN IP for a same-LAN peer, which bypasses the tunnel and
+             fails the server's tailnet-peer guard. -->
+        <domain includeSubdomains="false">100.75.105.61</domain>
     </domain-config>
 </network-security-config>

@@ -84,7 +84,7 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
             SshClient.connect(
                 host = hostNoPort,
                 port = 22,
-                user = "a0user",
+                user = "riveraj",
                 verifier = verifier
             )
                 .onSuccess {

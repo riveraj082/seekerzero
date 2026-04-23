@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -123,7 +124,7 @@ fun MainScaffold() {
     // System back gesture closes the drawer.
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().imePadding()) {
         Scaffold(
             containerColor = SeekerZeroColors.Background,
             bottomBar = {
