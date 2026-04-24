@@ -48,9 +48,18 @@ import dev.seekerzero.app.BuildConfig
 import dev.seekerzero.app.api.models.ErroredTask
 import dev.seekerzero.app.api.models.SubordinateStatus
 import dev.seekerzero.app.ui.components.CardSurface
+import dev.seekerzero.app.ui.components.NavRow
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
+import dev.seekerzero.app.SeekerZeroApplication
+import dev.seekerzero.app.service.NotificationHelper
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
+import android.app.NotificationManager
 
 @Composable
 fun StatusScreen(viewModel: StatusViewModel = viewModel()) {
@@ -72,6 +81,7 @@ fun StatusScreen(viewModel: StatusViewModel = viewModel()) {
             if ((health?.erroredTasks?.size ?: 0) > 0) {
                 item { ErrorsCard(health?.erroredTasks ?: emptyList()) }
             }
+            item { NotificationsCard() }
             item { AppVersionCard() }
         }
     }
@@ -290,6 +300,87 @@ private fun ProfileCard() {
             }
         }
     }
+}
+
+@Composable
+private fun NotificationsCard() {
+    val context = LocalContext.current
+    // Re-evaluated on every recomposition. Not ideal but good enough —
+    // the card is inside a LazyColumn and recomposes when the user
+    // returns from system settings thanks to the resume lifecycle.
+    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    val chatChannel = nm.getNotificationChannel(SeekerZeroApplication.CHANNEL_CHAT)
+    val schedChannel = nm.getNotificationChannel(SeekerZeroApplication.CHANNEL_SCHEDULED)
+    val chatEnabled = chatChannel?.importance?.let { it != NotificationManager.IMPORTANCE_NONE } ?: true
+    val schedEnabled = schedChannel?.importance?.let { it != NotificationManager.IMPORTANCE_NONE } ?: true
+
+    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    val batteryExempt = pm.isIgnoringBatteryOptimizations(context.packageName)
+
+    CardSurface(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Text(
+                text = "NOTIFICATIONS",
+                color = SeekerZeroColors.TextSecondary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+            )
+            NavRow(
+                label = "Chat replies",
+                value = if (chatEnabled) "On" else "Off",
+                onClick = { openChannelSettings(context, SeekerZeroApplication.CHANNEL_CHAT) }
+            )
+            NavRow(
+                label = "Scheduled deliveries",
+                value = if (schedEnabled) "On" else "Off",
+                onClick = { openChannelSettings(context, SeekerZeroApplication.CHANNEL_SCHEDULED) }
+            )
+            NavRow(
+                label = "Battery optimization",
+                value = if (batteryExempt) "Exempt" else "Optimized",
+                onClick = {
+                    if (!batteryExempt) requestBatteryExemption(context)
+                    else openAppBatterySettings(context)
+                }
+            )
+            NavRow(
+                label = "Send test — chat",
+                onClick = { NotificationHelper.fireTest(context, SeekerZeroApplication.CHANNEL_CHAT) }
+            )
+            NavRow(
+                label = "Send test — scheduled",
+                onClick = { NotificationHelper.fireTest(context, SeekerZeroApplication.CHANNEL_SCHEDULED) },
+                isLast = true
+            )
+        }
+    }
+}
+
+private fun openChannelSettings(context: android.content.Context, channelId: String) {
+    val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
+}
+
+@Suppress("BatteryLife")
+private fun requestBatteryExemption(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        data = Uri.parse("package:${context.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
+}
+
+private fun openAppBatterySettings(context: android.content.Context) {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:${context.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
 }
 
 @Composable

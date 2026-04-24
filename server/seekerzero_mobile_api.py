@@ -13,6 +13,7 @@ import json
 import mimetypes
 import queue
 import shutil
+import sqlite3
 import threading
 import time
 import uuid
@@ -1039,6 +1040,204 @@ def _task_delete_view(task_uuid: str):
     )
 
 
+# ---- Push queue (Phase 1: durable queue + long-poll endpoint) -----------
+# SeekerZero push pipe. Anything that needs to wake the phone asynchronously
+# (scheduled-task deliveries, mid-background chat completions, etc.) calls
+# enqueue_push(...) from anywhere in the process. The phone long-polls
+# /mobile/push/pending (since_id cursor) and acks via /mobile/push/ack.
+#
+# Storage: a dedicated SQLite DB so schema churn and WAL growth can't spill
+# into the shared knowledge/telemetry DBs. Not part of the integrity
+# baseline (DB files excluded as of 2026-04-20).
+#
+# Wake-up: a process-local Condition. enqueue_push() is expected to be
+# called from the same Flask process that serves /mobile/push/pending, so a
+# module-level cond is sufficient. (If that ever stops being true, swap to
+# a polling fallback inside the long-poll loop; the sleep is already there.)
+
+_PUSH_DB = Path('/a0/usr/databases/seekerzero_push.db')
+_PUSH_LONGPOLL_MAX_S = 55.0
+_PUSH_POLL_INTERVAL_S = 0.5
+_PUSH_FETCH_LIMIT = 50
+
+_push_cond = threading.Condition()
+_push_db_lock = threading.Lock()
+_push_db_ready = False
+
+
+def _push_db_conn():
+    _PUSH_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_PUSH_DB), timeout=5.0, isolation_level=None)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
+    return conn
+
+
+def _push_db_init() -> None:
+    global _push_db_ready
+    if _push_db_ready:
+        return
+    with _push_db_lock:
+        if _push_db_ready:
+            return
+        conn = _push_db_conn()
+        try:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS push_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at_ms INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    deep_link TEXT,
+                    payload_json TEXT,
+                    delivered INTEGER NOT NULL DEFAULT 0,
+                    acked_at_ms INTEGER
+                )
+            ''')
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_push_undelivered '
+                'ON push_queue(delivered, id)'
+            )
+        finally:
+            conn.close()
+        _push_db_ready = True
+
+
+def enqueue_push(
+    title: str,
+    body: str,
+    deep_link: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> int:
+    '''Insert a push row and wake any pending long-pollers. Returns new id.'''
+    _push_db_init()
+    now_ms = int(time.time() * 1000)
+    payload_json = json.dumps(payload) if payload is not None else None
+    conn = _push_db_conn()
+    try:
+        cur = conn.execute(
+            'INSERT INTO push_queue '
+            '(created_at_ms, title, body, deep_link, payload_json) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (now_ms, title, body, deep_link, payload_json),
+        )
+        new_id = int(cur.lastrowid)
+    finally:
+        conn.close()
+    with _push_cond:
+        _push_cond.notify_all()
+    return new_id
+
+
+def _push_fetch_pending(since_id: int) -> List[Dict[str, Any]]:
+    _push_db_init()
+    conn = _push_db_conn()
+    try:
+        cur = conn.execute(
+            'SELECT id, created_at_ms, title, body, deep_link, payload_json '
+            'FROM push_queue '
+            'WHERE id > ? AND delivered = 0 '
+            'ORDER BY id ASC LIMIT ?',
+            (int(since_id), _PUSH_FETCH_LIMIT),
+        )
+        out: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            payload = None
+            if row[5]:
+                try:
+                    payload = json.loads(row[5])
+                except Exception:
+                    payload = None
+            out.append({
+                'id': row[0],
+                'created_at_ms': row[1],
+                'title': row[2],
+                'body': row[3],
+                'deep_link': row[4],
+                'payload': payload,
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _push_pending_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    since_raw = flask_request.args.get('since_id', '0')
+    try:
+        since_id = int(since_raw)
+    except ValueError:
+        return _bad_request('since_id must be integer')
+
+    items = _push_fetch_pending(since_id)
+    if items:
+        return Response(
+            json.dumps({'ok': True, 'items': items}),
+            status=200,
+            mimetype='application/json',
+        )
+
+    deadline = time.monotonic() + _PUSH_LONGPOLL_MAX_S
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        with _push_cond:
+            _push_cond.wait(timeout=min(remaining, _PUSH_POLL_INTERVAL_S))
+        items = _push_fetch_pending(since_id)
+        if items:
+            return Response(
+                json.dumps({'ok': True, 'items': items}),
+                status=200,
+                mimetype='application/json',
+            )
+
+    return Response(
+        json.dumps({'ok': True, 'items': []}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
+def _push_ack_view():
+    ip = _client_ip()
+    if not _is_tailnet(ip):
+        return _forbidden('not a tailnet peer')
+    try:
+        payload = flask_request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return _bad_request('body must be JSON')
+    ids = payload.get('ids')
+    if not isinstance(ids, list) or not all(isinstance(x, int) for x in ids):
+        return _bad_request('ids must be a list of integers')
+    if not ids:
+        return Response(
+            json.dumps({'ok': True, 'acked': 0}),
+            status=200,
+            mimetype='application/json',
+        )
+    _push_db_init()
+    now_ms = int(time.time() * 1000)
+    placeholders = ','.join('?' * len(ids))
+    conn = _push_db_conn()
+    try:
+        cur = conn.execute(
+            f'UPDATE push_queue SET delivered = 1, acked_at_ms = ? '
+            f'WHERE id IN ({placeholders}) AND delivered = 0',
+            [now_ms] + ids,
+        )
+        n = cur.rowcount
+    finally:
+        conn.close()
+    return Response(
+        json.dumps({'ok': True, 'acked': int(n)}),
+        status=200,
+        mimetype='application/json',
+    )
+
+
 class SeekerzeroMobileApi(ApiHandler):
     '''Bootstrap handler. Loader instantiates us once at startup; we register
     /mobile/* routes via side-effect in __init__.'''
@@ -1143,6 +1342,18 @@ class SeekerzeroMobileApi(ApiHandler):
                 'seekerzero_mobile_task_delete',
                 _task_delete_view,
                 methods=['DELETE'],
+            )
+            app.add_url_rule(
+                '/mobile/push/pending',
+                'seekerzero_mobile_push_pending',
+                _push_pending_view,
+                methods=['GET'],
+            )
+            app.add_url_rule(
+                '/mobile/push/ack',
+                'seekerzero_mobile_push_ack',
+                _push_ack_view,
+                methods=['POST'],
             )
             SeekerzeroMobileApi._registered = True
 

@@ -22,6 +22,14 @@ class SeekerZeroApplication : Application(), ImageLoaderFactory {
 
     companion object {
         const val CHANNEL_SERVICE = "seekerzero_service"
+        // High-importance channel for inbound chat replies that arrive while
+        // the app is backgrounded. Foreground deliveries are ignored (the
+        // chat screen already shows them inline).
+        const val CHANNEL_CHAT = "seekerzero_chat"
+        // High-importance channel for scheduled-task results and any other
+        // asynchronous push delivery that originates server-side (not a
+        // direct response to something the user just sent).
+        const val CHANNEL_SCHEDULED = "seekerzero_scheduled"
     }
 
     override fun onCreate() {
@@ -48,6 +56,30 @@ class SeekerZeroApplication : Application(), ImageLoaderFactory {
         }
 
         nm.createNotificationChannel(serviceChannel)
+
+        val chatChannel = NotificationChannel(
+            CHANNEL_CHAT,
+            "Chat replies",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Agent Zero chat responses that arrive while the app is in the background."
+            setShowBadge(true)
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+        nm.createNotificationChannel(chatChannel)
+
+        val scheduledChannel = NotificationChannel(
+            CHANNEL_SCHEDULED,
+            "Scheduled deliveries",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Results from scheduled Agent Zero tasks routed to this phone."
+            setShowBadge(true)
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+        nm.createNotificationChannel(scheduledChannel)
 
         // Demo mode: kick off a one-time avatar download on a background
         // coroutine. Safe if the network is unavailable — falls through to

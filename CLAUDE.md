@@ -132,14 +132,21 @@ These nine components live in `ui/components/` and are the only way to build scr
 
 ## Notification discipline
 
-Two channels, created in `SeekerZeroApplication.onCreate`:
+Three channels, created in `SeekerZeroApplication.onCreate`:
 
-- `seekerzero_service` (LOW, silent, no badge): persistent "Connected to Agent Zero" notification while the foreground service is running.
-- `seekerzero_approvals` (HIGH, sound, badge): new approval gates only.
+- `seekerzero_service` (MIN, silent, no badge): persistent "Connected to Agent Zero" notification while the foreground service is running.
+- `seekerzero_chat` (HIGH, sound, badge): Agent Zero chat replies. Fires **only** when the app is backgrounded; in-foreground replies stay silent because the chat screen renders them inline.
+- `seekerzero_scheduled` (HIGH, sound, badge): results of scheduled tasks routed to this phone via the scheduler's `delivery_channel = "seekerzero"` (or `"both"`).
 
-**Approval-raised is the only event that fires a sound/vibration notification.** Routine A0 events, scheduled task runs, task completions, and chat assistant responses do **not** fire sound/badge notifications. Chat replies arrive silently — if the user isn't looking at the Chat tab, the reply just waits. The phone stays quiet unless there is something the user genuinely needs to act on immediately.
+The prior `seekerzero_approvals` channel was removed and is explicitly deleted on app start. Approvals v1 was cut; if it comes back, it can reuse `seekerzero_scheduled` or add a fourth channel.
+
+Notifications fire only for events the user genuinely cares about being pinged on: a chat reply they're waiting for, or a scheduled task result routed to the phone. Routine A0 events (tool calls mid-turn, subordinate spawns, health pings, errors not tied to a user-initiated delivery) do NOT fire notifications. The foreground-service notification is MIN-importance and silent.
+
+Tapping a chat-reply or scheduled-delivery notification deep-links into the chat tab (scheduled deliveries default to the current chat context; chat-reply notifications switch to the context that produced them).
 
 The foreground notification text is utilitarian: *"SeekerZero · Connected to Agent Zero"*. No emoji, no personality. This is a command surface, not a companion.
+
+Notification controls live on the Status tab under the "Notifications" card: per-channel system-settings shortcuts, battery-optimization exemption, and two test-notification buttons.
 
 ## File locations at runtime (on device)
 

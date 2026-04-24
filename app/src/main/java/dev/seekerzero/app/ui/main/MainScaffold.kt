@@ -86,6 +86,22 @@ fun MainScaffold() {
         SeekerZeroService.start(context)
     }
 
+    // Notification-tap deep link: a coroutine collects pendingInitialTab
+    // from ConfigManager, navigates the nav controller to that route, and
+    // clears the pending value so re-composition doesn't loop.
+    val pendingTab by ConfigManager.pendingInitialTabFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingTab) {
+        val target = pendingTab ?: return@LaunchedEffect
+        if (TABS.any { it.route == target } && currentRoute != target) {
+            navController.navigate(target) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        ConfigManager.pendingInitialTab = null
+    }
+
     // Custom drawer state. Plain boolean — drawer opens only via the
     // hamburger callback (programmatic), closes on scrim tap / back
     // gesture / row select / delete. No gesture-based open at all, no

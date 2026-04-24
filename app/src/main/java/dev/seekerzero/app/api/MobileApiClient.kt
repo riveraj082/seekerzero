@@ -6,6 +6,9 @@ import dev.seekerzero.app.api.models.ChatHistoryResponse
 import dev.seekerzero.app.api.models.ChatSendRequest
 import dev.seekerzero.app.api.models.ChatSendResponse
 import dev.seekerzero.app.api.models.HealthResponse
+import dev.seekerzero.app.api.models.PushAckRequest
+import dev.seekerzero.app.api.models.PushAckResponse
+import dev.seekerzero.app.api.models.PushPendingResponse
 import dev.seekerzero.app.api.models.TaskActionResponse
 import dev.seekerzero.app.api.models.TaskCreateRequest
 import dev.seekerzero.app.api.models.TaskCreateResponse
@@ -193,6 +196,40 @@ object MobileApiClient {
             )
             json.decodeFromString(TaskActionResponse.serializer(), body)
         }.onFailure { LogCollector.w(TAG, "taskDisable($uuid) failed: ${it.message}") }
+    }
+
+    /**
+     * Long-poll the server-side push queue. Returns as soon as any
+     * undelivered item exists, or after ~55s with an empty list. Uses
+     * [streamClient] (75s read timeout) so the socket stays open across
+     * the server's full long-poll window.
+     */
+    suspend fun pushPending(sinceId: Long): Result<PushPendingResponse> {
+        if (ConfigManager.demoMode) return Result.success(PushPendingResponse(ok = true, items = emptyList()))
+        return runCatching {
+            val url = buildUrl("/push/pending").toHttpUrl().newBuilder()
+                .addQueryParameter("since_id", sinceId.toString())
+                .build()
+                .toString()
+            LogCollector.d(TAG, "GET $url")
+            val body = execute(streamClient, Request.Builder().url(url).get().build())
+            json.decodeFromString(PushPendingResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "pushPending() failed: ${it.message}") }
+    }
+
+    suspend fun pushAck(ids: List<Long>): Result<PushAckResponse> {
+        if (ConfigManager.demoMode) return Result.success(PushAckResponse(ok = true, acked = ids.size))
+        if (ids.isEmpty()) return Result.success(PushAckResponse(ok = true, acked = 0))
+        return runCatching {
+            val url = buildUrl("/push/ack")
+            val bodyJson = json.encodeToString(PushAckRequest.serializer(), PushAckRequest(ids))
+            LogCollector.d(TAG, "POST $url (${ids.size} ids)")
+            val body = execute(
+                client,
+                Request.Builder().url(url).post(bodyJson.toRequestBody(jsonMediaType)).build()
+            )
+            json.decodeFromString(PushAckResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "pushAck() failed: ${it.message}") }
     }
 
     suspend fun taskDelete(uuid: String): Result<Unit> {

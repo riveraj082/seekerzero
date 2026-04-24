@@ -49,6 +49,15 @@ object ConfigManager {
     private val _activeChatContext = MutableStateFlow(DEFAULT_CHAT_CONTEXT)
     val activeChatContextFlow: StateFlow<String> = _activeChatContext
 
+    // Intent-delivered request to open a specific top-level tab on the next
+    // composition. MainScaffold consumes this once and clears it. Not
+    // persisted — only meaningful for the in-flight notification tap.
+    private val _pendingInitialTab = MutableStateFlow<String?>(null)
+    val pendingInitialTabFlow: StateFlow<String?> = _pendingInitialTab
+    var pendingInitialTab: String?
+        get() = _pendingInitialTab.value
+        set(value) { _pendingInitialTab.value = value }
+
     private val _demoMode = MutableStateFlow(false)
     val demoModeFlow: StateFlow<Boolean> = _demoMode
 
